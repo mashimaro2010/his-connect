@@ -377,54 +377,61 @@ export class HisPmkModel {
             bindings.push(`%${wardName}%`);
         }
 
-        const sql = `select hc.off_id as hospcode,x.placecode as wardcode
- ,x.halfplace as wardname
- ,min(x.ipd||x.depart||x.map_ward_type||x.map_ward_detail_type) as std_code
- ,sum(case when x.map_ward_type ='1' and x.map_ward_detail_type='00' then 1 else 0 end) as bed_normal
- ,sum(case when x.map_ward_type ='6' and x.map_ward_detail_type in('06') then 1 else 0 end) as bed_special
- ,sum(case when x.map_ward_type ='2' and x.map_ward_detail_type in('01','02','03','04','05','06','07','08','09','10','11') then 1 else 0 end) as bed_icu
- ,sum(case when x.map_ward_type ='3' and x.map_ward_detail_type in('01','02','03') then 1 else 0 end) as bed_semi
- ,sum(case when x.map_ward_type ='4' and x.map_ward_detail_type in('00') then 1 else 0 end) as bed_stroke
- ,sum(case when x.map_ward_type ='5' and x.map_ward_detail_type in('00') then 1 else 0 end) as bed_burn
- ,sum(case when x.map_ward_type ='6' and x.map_ward_detail_type in('04') then 1 else 0 end) as bed_minithanyaruk
- ,sum(case when x.map_ward_type ='6' and x.map_ward_detail_type in('03') then 1 else 0 end) as bed_extra
- ,sum(case when x.map_ward_type ='6' and x.map_ward_detail_type in('08') then 1 else 0 end) as lr
- ,sum(case when x.map_ward_type ='6' and x.map_ward_detail_type in('09') then 1 else 0 end) as clip
- ,sum(case when x.map_ward_type ='6' and x.map_ward_detail_type in('01') then 1 else 0 end) as imc
- ,sum(case when x.map_ward_type ='6' and x.map_ward_detail_type in('07') then 1 else 0 end) as homeward
- ,1 as isactive
-from
-(
-  select
-    pl.pt_place_type_code
-   ,pl.placecode
-   ,pl.halfplace
-   ,pl.dep_depend_on_id
-   ,pl.mapping_code
-   ,decode(pl.pt_place_type_code,'2','1') ipd
-   ,d.mapping_code as depart
-   ,b.map_ward_type
-   ,b.map_ward_detail_type
-   ,b.code
-   ,b.del_flag
-  from places pl, departs d, beds b
-  where pl.pt_place_type_code='2'
-    and pl.dep_depend_on_id = d.depend_on_id
-    and pl.placecode = b.pla_placecode
-    and pl.placecode not in ('1','1108')
-    and pl.del_flag is null
-    and b.del_flag is null
-    and b.map_opdipd='1'
-    ${additionalWheres}
-) x
-,(
-  select off_id
-  from hospital_code
-  where rownum = 1
-) hc
-group by x.placecode, x.halfplace, hc.off_id
-order by x.placecode`;
-        console.log(JSON.stringify(sql));
+        const sql = `
+    SELECT
+      (SELECT off_id FROM hospital_code WHERE ROWNUM = 1) AS hospcode,
+      x.placecode AS wardcode,
+      x.halfplace AS wardname,
+      x.ipd || x.depart || x.map_ward_type || x.map_ward_detail_type AS std_code,
+
+      SUM(CASE WHEN x.map_ward_type = '1' AND x.map_ward_detail_type = '00' THEN 1 ELSE 0 END) AS bed_normal,
+      SUM(CASE WHEN x.map_ward_type = '6' AND x.map_ward_detail_type IN ('06') THEN 1 ELSE 0 END) AS bed_special,
+      SUM(CASE WHEN x.map_ward_type = '2' AND x.map_ward_detail_type IN ('01','02','03','04','05','06','07','08','09','10','11') THEN 1 ELSE 0 END) AS bed_icu,
+      SUM(CASE WHEN x.map_ward_type = '3' AND x.map_ward_detail_type IN ('01','02','03') THEN 1 ELSE 0 END) AS bed_semi,
+      SUM(CASE WHEN x.map_ward_type = '4' AND x.map_ward_detail_type IN ('00') THEN 1 ELSE 0 END) AS bed_stroke,
+      SUM(CASE WHEN x.map_ward_type = '5' AND x.map_ward_detail_type IN ('00') THEN 1 ELSE 0 END) AS bed_burn,
+      SUM(CASE WHEN x.map_ward_type = '6' AND x.map_ward_detail_type IN ('04') THEN 1 ELSE 0 END) AS bed_minithanyaruk,
+      SUM(CASE WHEN x.map_ward_type = '6' AND x.map_ward_detail_type IN ('03') THEN 1 ELSE 0 END) AS bed_extra,
+
+      SUM(CASE WHEN x.map_ward_type = '6' AND x.map_ward_detail_type IN ('08') THEN 1 ELSE 0 END) AS Ir,
+      SUM(CASE WHEN x.map_ward_type = '6' AND x.map_ward_detail_type IN ('09') THEN 1 ELSE 0 END) AS clip,
+      SUM(CASE WHEN x.map_ward_type = '6' AND x.map_ward_detail_type IN ('01') THEN 1 ELSE 0 END) AS imc,
+
+      SUM(CASE WHEN x.map_ward_type = '6' AND x.map_ward_detail_type IN ('07') THEN 1 ELSE 0 END) AS homeward,
+      1 AS isactive
+
+    FROM (
+      SELECT
+        pl.pt_place_type_code,
+        pl.placecode,
+        pl.halfplace,
+        pl.dep_depend_on_id,
+        pl.mapping_code,
+        DECODE(pl.pt_place_type_code, '2', '1') AS ipd,
+        d.mapping_code AS depart,
+        b.map_ward_type,
+        b.map_ward_detail_type,
+        b.code,
+        b.del_flag
+      FROM places pl, departs d, beds b
+      WHERE pl.pt_place_type_code = '2'
+        AND pl.dep_depend_on_id = d.depend_on_id
+        AND pl.placecode = b.pla_placecode
+        AND pl.placecode NOT IN ('1','1108')
+        AND pl.del_flag IS NULL
+        AND NVL(TRIM(UPPER(b.del_flag)), 'N') <> 'Y'
+        AND LENGTH(TRIM(
+          DECODE(pl.pt_place_type_code,'2','1')
+          || d.mapping_code
+          || b.map_ward_type
+          || b.map_ward_detail_type
+        )) = 6
+        ${additionalWheres}
+    ) x
+    GROUP BY
+      x.placecode, x.halfplace, x.ipd, x.depart, x.map_ward_type, x.map_ward_detail_type
+    ORDER BY x.placecode
+  `;
 
         try {
             const result: any = await db.raw(sql, bindings);
@@ -435,41 +442,103 @@ order by x.placecode`;
         }
     }
 
+
     countBedNo(db: Knex) {
+        console.log('[countBedNo] start');
 
-        return db('ERP_GETBEDNO')
-            .count('* as total_bed')
-            .first()
-            .then((result) => {
+        const q = db({ b: 'BEDS' })
+            .join({ bt: 'BEDTYPES' }, 'b.BED1_TYPE_ID', 'bt.TYPE_ID')
+            .join({ p: 'PLACES' }, 'b.PLA_PLACECODE', 'p.PLACECODE')
+            .join({ d: 'DEPARTS' }, 'p.DEP_DEPEND_ON_ID', 'd.DEPEND_ON_ID')
+            .whereNull('b.DEL_FLAG')
+            .whereNull('p.DEL_FLAG')
+            .whereNotIn('p.PLACECODE', ['1', '1108'])
+            .whereRaw(`TRIM(TO_CHAR("b"."MAP_OPDIPD")) = ?`, ['1'])
+            // บังคับ std_code ให้ครบ 6 หลักตามสเปก
+            .whereRaw(`
+      LENGTH(TRIM(
+        DECODE("p"."PT_PLACE_TYPE_CODE", '2', '1', '0')
+        || "d"."MAPPING_CODE"
+        || "b"."MAP_WARD_TYPE"
+        || "b"."MAP_WARD_DETAIL_TYPE"
+      )) = 6
+    `)
+            .count({ total_beds: '*' })
+            .first();
 
-                return { total_bed: parseInt(result.total_bed as string) || 0 };
-            })
-            .catch(() => {
+        const sql = q.toSQL();
+        console.log('[countBedNo] SQL:', sql.sql);
+        console.log('[countBedNo] Bindings:', sql.bindings);
 
-                return { total_bed: 0 };
-            });
+        return q;
     }
 
-    async getBedNo(db: Knex, bedno: any = null, start = -1, limit: number = 1000) {
-        let query = db('ERP_GETBEDNO')
-            .select('*');
+    async getBedNo(db: Knex, bedno: string | null = null, start = -1, limit = 500) {
+        // std_code expression (ใช้ซ้ำทั้ง WHERE และ SELECT)
+        const stdExpr = `
+    TRIM(
+      DECODE("p"."PT_PLACE_TYPE_CODE", '2', '1', '0')
+      || "d"."MAPPING_CODE"
+      || "b"."MAP_WARD_TYPE"
+      || "b"."MAP_WARD_DETAIL_TYPE"
+    )
+  `;
 
+        const base = db({ b: 'BEDS' })
+            .join({ bt: 'BEDTYPES' }, 'b.BED1_TYPE_ID', 'bt.TYPE_ID')
+            .join({ p: 'PLACES' }, 'b.PLA_PLACECODE', 'p.PLACECODE')
+            .join({ d: 'DEPARTS' }, 'p.DEP_DEPEND_ON_ID', 'd.DEPEND_ON_ID')
+            .whereNull('b.DEL_FLAG')
+            .whereNull('p.DEL_FLAG')
+            .whereNotIn('p.PLACECODE', ['1', '1108'])
+            .whereRaw(`TRIM(TO_CHAR("b"."MAP_OPDIPD")) = ?`, ['1'])
+            // ถ้าต้องการแค่ "ยาว 6 ตัว" อย่างเดียว อันนี้พอ แต่แนะนำให้ใช้ REGEXP ด้วย
+            .whereRaw(`LENGTH(${stdExpr}) = 6`)
+            // ให้เป็น "ตัวเลข 6 หลักจริง"
+            .whereRaw(`REGEXP_LIKE(${stdExpr}, '^[0-9]{6}$')`);
 
         if (bedno) {
-            query = query.where('BEDNO', bedno);
+            base.andWhere('b.CODE', bedno);
         }
 
+        const q = base
+            .select([
+                db.raw(`"b"."CODE" AS "bedno"`),
+                db.raw(`"bt"."NAME" AS "bedname"`),
+                db.raw(`"b"."CODE" AS "roomno"`), // TODO: ถ้ามีเลขห้องจริงให้เปลี่ยนคอลัมน์นี้
+                db.raw(`"b"."PLA_PLACECODE" AS "wardcode"`),
+                db.raw(`${stdExpr} AS "std_code"`),
 
-        if (limit > 0) {
-            query = query.limit(limit);
+                // ตัวเลือก A (แนะนำถ้า isactive = "เตียงใช้งานใน master"):
+                db.raw(`1 AS "isactive"`),
+
+                // ตัวเลือก B (ถ้าต้องการส่ง "ครองเตียง" จริง ๆ):
+                // db.raw(`CASE WHEN NVL("b"."OCCUPY_FLAG",'N') = 'Y' THEN 1 ELSE 0 END AS "isactive"`),
+            ])
+            .orderBy('bt.NAME', 'asc');
+
+        // ไม่ทำ paging
+        if (start < 0) {
+            const rows = await q;
+            return rows;
         }
 
+        // ทำ paging แบบ Oracle ROWNUM
+        const compiled = q.toSQL();
+        const endRow = start + limit;
 
-        if (start >= 0) {
-            query = query.offset(start);
-        }
+        const pagedSql = `
+    SELECT * FROM (
+      SELECT a.*, ROWNUM rnum
+      FROM (${compiled.sql}) a
+      WHERE ROWNUM <= ?
+    )
+    WHERE rnum > ?
+  `;
 
-        return query;
+        const result: any = await db.raw(pagedSql, [...compiled.bindings, endRow, start]);
+        const rows = result?.rows ?? result ?? [];
+        return rows;
     }
 
 

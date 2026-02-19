@@ -150,46 +150,6 @@ const router = (fastify, {}, next) => {
             });
         }
     });
-    fastify.post('/token-status/:tokenKey', { preHandler: [fastify.authenticate] }, async (req, res) => {
-        let tokenKey = req.params.tokenKey;
-        if (tokenKey) {
-            try {
-                const result = await loginModel.checkToken(global.dbISOnline, tokenKey);
-                if (result.length) {
-                    res.send({
-                        statusCode: http_status_codes_1.StatusCodes.OK,
-                        status: http_status_codes_1.StatusCodes.OK,
-                        ok: true,
-                        rows: result
-                    });
-                }
-                else {
-                    res.send({
-                        statusCode: http_status_codes_1.StatusCodes.BAD_REQUEST,
-                        status: http_status_codes_1.StatusCodes.BAD_REQUEST,
-                        ok: false,
-                        message: 'Invalid token'
-                    });
-                }
-            }
-            catch (error) {
-                res.send({
-                    statusCode: http_status_codes_1.StatusCodes.INTERNAL_SERVER_ERROR,
-                    status: http_status_codes_1.StatusCodes.INTERNAL_SERVER_ERROR,
-                    ok: false,
-                    message: error.message
-                });
-            }
-        }
-        else {
-            res.send({
-                statusCode: http_status_codes_1.StatusCodes.BAD_REQUEST,
-                status: http_status_codes_1.StatusCodes.BAD_REQUEST,
-                ok: false,
-                message: (0, http_status_codes_1.getReasonPhrase)(http_status_codes_1.StatusCodes.BAD_REQUEST)
-            });
-        }
-    });
     fastify.post('/token-status__/:tokenKey', { preHandler: [fastify.authenticate] }, async (req, res) => {
         verifyToken(req, res);
         let tokenKey = req.params.tokenKey;

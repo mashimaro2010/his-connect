@@ -1,6 +1,50 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const knex_1 = require("knex");
+const oracledb = require("oracledb");
+let oracleThickModeInitialized = false;
+const initOracleThickMode = () => {
+    if (oracleThickModeInitialized) {
+        return;
+    }
+    try {
+        const libDir = process.env.ORACLE_CLIENT_LIB_DIR || undefined;
+        const configDir = process.env.ORACLE_CLIENT_CONFIG_DIR || undefined;
+        const initOptions = {};
+        if (libDir) {
+            initOptions.libDir = libDir;
+        }
+        if (configDir) {
+            initOptions.configDir = configDir;
+        }
+        if (Object.keys(initOptions).length > 0) {
+            oracledb.initOracleClient(initOptions);
+        }
+        else {
+            oracledb.initOracleClient();
+        }
+        oracleThickModeInitialized = true;
+        console.log('✅ Oracle Thick mode initialized successfully');
+        if (libDir) {
+            console.log(`   📁 Library directory: ${libDir}`);
+        }
+        if (configDir) {
+            console.log(`   📄 Config directory: ${configDir}`);
+        }
+    }
+    catch (err) {
+        if (err.message.includes('already been initialized')) {
+            oracleThickModeInitialized = true;
+            console.log('⚠️  Oracle Thick mode already initialized');
+        }
+        else {
+            console.error('❌ Failed to initialize Oracle Thick mode:', err.message);
+            console.error('   💡 Tip: Make sure Oracle Instant Client is installed');
+            console.error('   💡 Tip: Set ORACLE_CLIENT_LIB_DIR environment variable');
+            throw err;
+        }
+    }
+};
 var timezone = 'Asia/Bangkok';
 var options = {
     HIS: {
@@ -33,7 +77,6 @@ var options = {
     }
 };
 const dbConnection = (type = 'HIS') => {
-    var _a;
     type = type.toUpperCase();
     const config = options[type];
     const connection = config.connection;
@@ -59,16 +102,33 @@ const dbConnection = (type = 'HIS') => {
         }
     }
     else if (config.client == 'oracledb') {
-        (_a = process.env).NODE_ORACLEDB_DRIVER_MODE || (_a.NODE_ORACLEDB_DRIVER_MODE = process.env.DB_ORACLEDB_DRIVER_MODE || 'thin');
+        const driverMode = (process.env.NODE_ORACLEDB_DRIVER_MODE ||
+            process.env.DB_ORACLEDB_DRIVER_MODE ||
+            'thin').toLowerCase();
+        if (driverMode === 'thick') {
+            console.log('🔧 Using Oracle Thick mode...');
+            initOracleThickMode();
+        }
+        else {
+            console.log('⚡ Using Oracle Thin mode (no client libraries needed)');
+        }
+        const port = connection.port || 1521;
+        const connectString = `${connection.host}:${port}/${connection.database}`;
         opt = {
             client: 'oracledb',
             connection: {
-                connectString: `${connection.host}:${connection.port | 1521}/${connection.database}`,
+                connectString: connectString,
                 user: connection.user,
                 password: connection.password
             },
-            pool: { min: 0, max: 10 },
+            pool: {
+                min: 0,
+                max: 10
+            },
         };
+        console.log(`   📊 Database: ${type}`);
+        console.log(`   🔌 Connect string: ${connectString}`);
+        console.log(`   👤 User: ${connection.user}`);
     }
     else if (config.client == 'pg') {
         opt = {

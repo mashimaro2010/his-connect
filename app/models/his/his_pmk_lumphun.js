@@ -7,10 +7,6 @@ const hcode = process.env.HOSPCODE;
 const dbName = process.env.HIS_DB_NAME;
 const dbClient = process.env.HIS_DB_CLIENT;
 class HisPmkModel {
-    async testConnect(db) {
-        const row = await db('PATIENTS').select('HN').first();
-        return { connection: row ? true : false };
-    }
     getTableName(db) {
         if (dbClient === 'oracledb') {
             return db('ALL_TABLES')
@@ -21,6 +17,9 @@ class HisPmkModel {
                 .select('table_name')
                 .where('table_schema', '=', dbName);
         }
+    }
+    testConnect(db) {
+        return db('PATIENTS').select('HN').limit(1);
     }
     async getReferOut(db, date, hospCode = hcode) {
         date = moment(date).format('YYYY-MM-DD');
@@ -262,76 +261,15 @@ class HisPmkModel {
             .where(columnName, "=", searchNo)
             .limit(5000);
     }
-    sumReferIn(db, dateStart, dateEnd) {
-        return [];
-    }
-    async getWard(db, wardCode = '', wardName = '') {
-        let additionalWheres = '';
-        const bindings = [];
+    getWard(db, wardCode = '', wardName = '') {
+        let query = db('ERP_GETWARD');
         if (wardCode) {
-            additionalWheres = ` AND pl.placecode = ? `;
-            bindings.push(wardCode);
+            query = query.where('WARDCODE', wardCode);
         }
-        else if (wardName) {
-            additionalWheres = ` AND pl.halfplace LIKE ? `;
-            bindings.push(`%${wardName}%`);
+        if (wardName) {
+            query = query.where('WARDNAME', 'like', `%${wardName}%`);
         }
-        const sql = `select hc.off_id as hospcode,x.placecode as wardcode
- ,x.halfplace as wardname
- ,min(x.ipd||x.depart||x.map_ward_type||x.map_ward_detail_type) as std_code
- ,sum(case when x.map_ward_type ='1' and x.map_ward_detail_type='00' then 1 else 0 end) as bed_normal
- ,sum(case when x.map_ward_type ='6' and x.map_ward_detail_type in('06') then 1 else 0 end) as bed_special
- ,sum(case when x.map_ward_type ='2' and x.map_ward_detail_type in('01','02','03','04','05','06','07','08','09','10','11') then 1 else 0 end) as bed_icu
- ,sum(case when x.map_ward_type ='3' and x.map_ward_detail_type in('01','02','03') then 1 else 0 end) as bed_semi
- ,sum(case when x.map_ward_type ='4' and x.map_ward_detail_type in('00') then 1 else 0 end) as bed_stroke
- ,sum(case when x.map_ward_type ='5' and x.map_ward_detail_type in('00') then 1 else 0 end) as bed_burn
- ,sum(case when x.map_ward_type ='6' and x.map_ward_detail_type in('04') then 1 else 0 end) as bed_minithanyaruk
- ,sum(case when x.map_ward_type ='6' and x.map_ward_detail_type in('03') then 1 else 0 end) as bed_extra
- ,sum(case when x.map_ward_type ='6' and x.map_ward_detail_type in('08') then 1 else 0 end) as lr
- ,sum(case when x.map_ward_type ='6' and x.map_ward_detail_type in('09') then 1 else 0 end) as clip
- ,sum(case when x.map_ward_type ='6' and x.map_ward_detail_type in('01') then 1 else 0 end) as imc
- ,sum(case when x.map_ward_type ='6' and x.map_ward_detail_type in('07') then 1 else 0 end) as homeward
- ,1 as isactive
-from
-(
-  select
-    pl.pt_place_type_code
-   ,pl.placecode
-   ,pl.halfplace
-   ,pl.dep_depend_on_id
-   ,pl.mapping_code
-   ,decode(pl.pt_place_type_code,'2','1') ipd
-   ,d.mapping_code as depart
-   ,b.map_ward_type
-   ,b.map_ward_detail_type
-   ,b.code
-   ,b.del_flag
-  from places pl, departs d, beds b
-  where pl.pt_place_type_code='2'
-    and pl.dep_depend_on_id = d.depend_on_id
-    and pl.placecode = b.pla_placecode
-    and pl.placecode not in ('1','1108')
-    and pl.del_flag is null
-    and b.del_flag is null
-    and b.map_opdipd='1'
-    ${additionalWheres}
-) x
-,(
-  select off_id
-  from hospital_code
-  where rownum = 1
-) hc
-group by x.placecode, x.halfplace, hc.off_id
-order by x.placecode`;
-        console.log(JSON.stringify(sql));
-        try {
-            const result = await db.raw(sql, bindings);
-            return result?.rows ?? result;
-        }
-        catch (error) {
-            console.error('Error in getWard raw query:', error);
-            throw error;
-        }
+        return query.select('*');
     }
     countBedNo(db) {
         return db('ERP_GETBEDNO')
@@ -358,231 +296,85 @@ order by x.placecode`;
         }
         return query;
     }
-    async concurrentIPDByWard(db, date) {
-        const dateStart = moment(date).startOf('hour').format('YYYY-MM-DD HH:mm:ss');
-        const dateEnd = moment(date).endOf('hour').format('YYYY-MM-DD HH:mm:ss');
-        let sql = `WITH ward_std AS (
-  SELECT placecode, std_code
-  FROM (
-    SELECT
-      pl.placecode,
-      ( DECODE(pl.pt_place_type_code, '2', '1', '0')
-        || d.mapping_code
-        || b.map_ward_type
-        || b.map_ward_detail_type
-      ) AS std_code,
-      ROW_NUMBER() OVER (
-        PARTITION BY pl.placecode
-        ORDER BY b.map_ward_type, b.map_ward_detail_type
-      ) rn
-    FROM places pl
-    JOIN departs d ON pl.dep_depend_on_id = d.depend_on_id
-    JOIN beds b    ON pl.placecode = b.pla_placecode
-    WHERE pl.pt_place_type_code = '2'
-      AND pl.placecode NOT IN ('1','1108')
-      AND pl.del_flag IS NULL
-      AND NVL(TRIM(UPPER(b.del_flag)), 'N') <> 'Y'
-      AND b.map_opdipd = '1'
-      AND LENGTH(TRIM(
-        DECODE(pl.pt_place_type_code,'2','1','0')
-        || d.mapping_code
-        || b.map_ward_type
-        || b.map_ward_detail_type
-      )) = 6
-  )
-  WHERE rn = 1
-)
-SELECT
-  (SELECT off_id FROM hospital_code WHERE ROWNUM = 1) AS hospcode,
-  CAST(SYSTIMESTAMP AS DATE) AS "date",
-  pt.pla_placecode AS wardcode,
-  ws.std_code,
-
-  COUNT(*) AS cases,
-
-  SUM(CASE
-        WHEN pt.dateadmit BETWEEN TO_DATE(?,'YYYY-MM-DD HH24:MI:SS')
-                             AND TO_DATE(?,'YYYY-MM-DD HH24:MI:SS')
-        THEN 1 ELSE 0
-      END) AS new_case,
-
-  SUM(CASE
-        WHEN pt.datedisch BETWEEN TO_DATE(?,'YYYY-MM-DD HH24:MI:SS')
-                              AND TO_DATE(?,'YYYY-MM-DD HH24:MI:SS')
-        THEN 1 ELSE 0
-      END) AS discharge,
-
-  SUM(CASE
-        WHEN pt.datedisch BETWEEN TO_DATE(?,'YYYY-MM-DD HH24:MI:SS')
-                              AND TO_DATE(?,'YYYY-MM-DD HH24:MI:SS')
-         AND pt.dt_type_id IN ('8','9')
-        THEN 1 ELSE 0
-      END) AS death,
-
-  -- breakdown ตามสเปก (ต้อง join beds จากเตียงของผู้ป่วย)
-  SUM(CASE WHEN b.map_ward_type = '1' AND b.map_ward_detail_type = '00' THEN 1 ELSE 0 END) AS normal,
-  SUM(CASE WHEN b.map_ward_type = '6' AND b.map_ward_detail_type = '06' THEN 1 ELSE 0 END) AS special,
-  SUM(CASE WHEN b.map_ward_type = '2' AND b.map_ward_detail_type IN ('01','02','03','04','05','06','07','08','09','10','11') THEN 1 ELSE 0 END) AS icu,
-  SUM(CASE WHEN b.map_ward_type = '3' AND b.map_ward_detail_type IN ('01','02','03') THEN 1 ELSE 0 END) AS semi,
-  SUM(CASE WHEN b.map_ward_type = '4' AND b.map_ward_detail_type IN ('00') THEN 1 ELSE 0 END) AS stroke,
-  SUM(CASE WHEN b.map_ward_type = '5' AND b.map_ward_detail_type IN ('00') THEN 1 ELSE 0 END) AS burn,
-  SUM(CASE WHEN b.map_ward_type = '6' AND b.map_ward_detail_type IN ('01') THEN 1 ELSE 0 END) AS imc,
-  SUM(CASE WHEN b.map_ward_type = '6' AND b.map_ward_detail_type IN ('08') THEN 1 ELSE 0 END) AS lr,
-  SUM(CASE WHEN b.map_ward_type = '6' AND b.map_ward_detail_type IN ('09') THEN 1 ELSE 0 END) AS clip,
-  SUM(CASE WHEN b.map_ward_type = '6' AND b.map_ward_detail_type IN ('04') THEN 1 ELSE 0 END) AS minithanyaruk,
-  SUM(CASE WHEN b.map_ward_type = '6' AND b.map_ward_detail_type IN ('07') THEN 1 ELSE 0 END) AS homeward
-
-FROM ipdtrans pt
-LEFT JOIN ward_std ws ON ws.placecode = pt.pla_placecode
-
--- สำคัญ: เปลี่ยน pt.bedno ให้เป็นชื่อคอลัมน์จริงใน IPDTRANS ที่เก็บเตียงปัจจุบัน
-LEFT JOIN beds b
-  ON b.pla_placecode = pt.pla_placecode
- AND b.code = pt.BED_NO
- AND NVL(TRIM(UPPER(b.del_flag)), 'N') <> 'Y'
-
--- cases = overlap ช่วงเวลา [dateStart, dateEnd]
-WHERE pt.dateadmit <= TO_DATE(?,'YYYY-MM-DD HH24:MI:SS')
-  AND (pt.datedisch IS NULL OR pt.datedisch >= TO_DATE(?,'YYYY-MM-DD HH24:MI:SS'))
-GROUP BY pt.pla_placecode, ws.std_code
-ORDER BY pt.pla_placecode`;
-        const result = await db.raw(sql, [dateStart, dateEnd, dateStart, dateEnd, dateStart, dateEnd, dateStart, dateEnd]);
-        console.log(result);
-        return result;
-    }
-    concurrentIPDByClinic(db, date) {
-        return [];
-    }
-    sumOpdVisitByClinic(db, date) {
-        return [];
-    }
-    async getVisitForMophAlert2(db, date, isRowCount = false, start = -1, limit = 1000) {
-        try {
-            const dateStr = moment(date).isValid() ? moment(date).format('YYYY-MM-DD') : moment().format('YYYY-MM-DD');
-            let query = db('OPDS as O')
-                .join('PATIENTS as P', (join) => {
-                join.on('O.PAT_RUN_HN', '=', 'P.RUN_HN')
-                    .andOn('O.PAT_YEAR_HN', '=', 'P.YEAR_HN');
-            })
-                .join('PLACES as PL', 'O.PLA_PLACECODE', '=', 'PL.PLACECODE')
-                .where('O.MARK_YN', 'Y')
-                .whereRaw("O.OPD_DATE BETWEEN TO_DATE(?, 'yyyy-mm-dd') AND TO_DATE(?, 'yyyy-mm-dd') + 0.99999", [dateStr, dateStr]);
-            if (isRowCount) {
-                const result = await query.count('* as row_count').first();
-                return result;
-            }
-            else {
-                query.select(db.raw("(SELECT off_id FROM hospital_code) as hospcode"), 'P.ID_CARD as cid', 'P.HN', 'O.OPD_NO as vn', db.raw("'OPD' as department_type"), 'O.PLA_PLACECODE as department_code', db.raw("PL.FULLPLACE as department_name"), db.raw("TO_CHAR(O.OPD_DATE,'yyyy-mm-dd') as date_service"), db.raw("TO_CHAR(O.OPD_TIME,'hh24:mi:ss') as time_service"));
-                console.log('Query SQL>>>>>  :', query.toString());
-                return await query;
-            }
-        }
-        catch (error) {
-            console.error('Error:', error);
-            throw error;
-        }
-    }
-    async getVisitForMophAlert(db, date, isRowCount = false, start = -1, limit = 1000) {
-        try {
-            console.log('--- 1. Input Parameters ---');
-            console.log('Date Input:', date);
-            console.log('isRowCount:', isRowCount);
-            console.log('Start:', start, 'Limit:', limit);
-            const dateStr = moment(date).isValid() ? moment(date).format('YYYY-MM-DD') : moment().format('YYYY-MM-DD');
-            console.log('--- 2. Date Converted ---');
-            console.log('DateStr used in query:', dateStr);
-            const innerSql = `
-      SELECT 
-        (SELECT off_id FROM hospital_code) as hospcode,
-        p.ID_CARD as cid,
-        p.HN as hn,
-        o.OPD_NO as vn,
-        'OPD' as department_type,
-        o.PLA_PLACECODE as department_code,
-        pl.FULLPLACE as department_name,
-        TO_CHAR(o.OPD_DATE, 'yyyy-mm-dd') as date_service,
-        TO_CHAR(o.OPD_TIME, 'hh24:mi:ss') as time_service,
-        o.MARK_YN as service_status
-      FROM OPDS o
-      JOIN PATIENTS p ON o.PAT_RUN_HN = p.RUN_HN AND o.PAT_YEAR_HN = p.YEAR_HN
-      JOIN PLACES pl ON o.PLA_PLACECODE = pl.PLACECODE
-      WHERE o.MARK_YN = 'Y'
-      AND o.OPD_DATE BETWEEN TO_DATE(?, 'yyyy-mm-dd') AND TO_DATE(?, 'yyyy-mm-dd') + 0.99999
-      ORDER BY o.OPD_DATE ASC, o.OPD_TIME ASC
+    async concurrentIPDByWard(db, date, limit = maxLimit) {
+        const base = moment(date || undefined).isValid()
+            ? moment(date)
+            : moment();
+        const dateStart = base.format('YYYY-MM-DD HH:mm:ss');
+        const dateEnd = base.clone().add(59, 'minutes').format('YYYY-MM-DD HH:mm:ss');
+        const whereRaw = `
+        ERP_ADMIT.ADMIT_DATETIME <= TO_DATE(?, 'YYYY-MM-DD HH24:MI:SS')
+        AND (
+            ERP_ADMIT.DISC_DATETIME IS NULL
+            OR ERP_ADMIT.DISC_DATETIME >= TO_DATE(?, 'YYYY-MM-DD HH24:MI:SS')
+        )
     `;
-            if (isRowCount) {
-                const countSql = `SELECT COUNT(*) as "row_count" FROM (${innerSql})`;
-                console.log('--- 3. Executing Count Query ---');
-                const result = await db.raw(countSql, [dateStr, dateStr]);
-                console.log('--- 4. Raw Count Result ---');
-                let countVal = 0;
-                if (Array.isArray(result) && result.length > 0) {
-                    const row = result[0];
-                    countVal = row.row_count || row.ROW_COUNT || row['COUNT(*)'] || 0;
-                }
-                else if (result && result.rows) {
-                    countVal = result.rows[0]?.ROW_COUNT || 0;
-                }
-                console.log('--- 5. Final Count Value ---');
-                return countVal;
-            }
-            else {
-                let finalSql = innerSql;
-                let bindings = [dateStr, dateStr];
-                if (start >= 0) {
-                    const endRow = start + limit;
-                    finalSql = `
-          SELECT * FROM (
-            SELECT a.*, ROWNUM as rnum FROM (
-              ${innerSql}
-            ) a 
-            WHERE ROWNUM <= ?
-          ) 
-          WHERE rnum > ?
-        `;
-                    bindings.push(endRow, start);
-                }
-                console.log('--- 6. Executing Data Query ---');
-                const result = await db.raw(finalSql, bindings);
-                console.log('--- 7. Raw Data Result ---');
-                if (Array.isArray(result) && result.length > 0) {
-                    console.log('First Row Sample (Raw):', result[0]);
-                }
-                else {
-                    console.log('Result is empty or invalid format');
-                }
-                const rows = Array.isArray(result) ? result : [];
-                const mappedRows = rows.map((row) => {
-                    return {
-                        hospcode: row.hospcode || row.HOSPCODE || '',
-                        cid: row.cid || row.CID || '',
-                        hn: row.hn || row.HN || '',
-                        vn: (row.vn || row.VN || '').toString(),
-                        department_type: 'OPD',
-                        department_code: row.department_code || row.DEPARTMENT_CODE || '',
-                        department_name: row.department_name || row.DEPARTMENT_NAME || '',
-                        date_service: row.date_service || row.DATE_SERVICE || '',
-                        time_service: row.time_service || row.TIME_SERVICE || '',
-                        service_status: row.service_status || row.SERVICE_STATUS || '',
-                        service_status_name: 'ตรวจแล้ว'
-                    };
-                });
-                console.log('--- 8. Mapped Data ---');
-                if (mappedRows.length > 0) {
-                    console.log('First Row Mapped:', mappedRows[0]);
-                }
-                else {
-                    console.log('No rows returned after map');
-                }
-                console.log(mappedRows);
-                return mappedRows;
-            }
+        let query = db('ERP_ADMIT')
+            .leftJoin('ERP_CONCURRENTIPDBYWARD', 'ERP_ADMIT.WARD_CODE', 'ERP_CONCURRENTIPDBYWARD.WARDCODE')
+            .select('ERP_CONCURRENTIPDBYWARD.WARDCODE as wardcode', 'ERP_CONCURRENTIPDBYWARD.WARDNAME as wardname', 'ERP_CONCURRENTIPDBYWARD.STD_CODE as std_code', 'ERP_CONCURRENTIPDBYWARD.DATE_MODIFIED as date_modified', 'ERP_CONCURRENTIPDBYWARD.NORMAL as bed_normal', 'ERP_CONCURRENTIPDBYWARD.STROKE as bed_stroke', 'ERP_CONCURRENTIPDBYWARD.SPECIAL as bed_special', 'ERP_CONCURRENTIPDBYWARD.ICU as bed_icu', db.raw('COUNT(ERP_ADMIT.AN) as cases'))
+            .whereRaw(whereRaw, [dateStart, dateEnd])
+            .groupBy('ERP_CONCURRENTIPDBYWARD.WARDCODE', 'ERP_CONCURRENTIPDBYWARD.WARDNAME', 'ERP_CONCURRENTIPDBYWARD.STD_CODE', 'ERP_CONCURRENTIPDBYWARD.DATE_MODIFIED', 'ERP_CONCURRENTIPDBYWARD.NORMAL', 'ERP_CONCURRENTIPDBYWARD.STROKE', 'ERP_CONCURRENTIPDBYWARD.SPECIAL', 'ERP_CONCURRENTIPDBYWARD.ICU')
+            .orderBy('ERP_CONCURRENTIPDBYWARD.WARDCODE');
+        if (limit && limit > 0 && limit <= maxLimit) {
+            query = query.limit(limit);
         }
-        catch (error) {
-            console.error('!!! ERROR in getVisitForMophAlert !!!');
-            console.error(error);
-            throw error;
+        const rows = await query;
+        return rows;
+    }
+    async concurrentIPDByClinic(db, date, limit = maxLimit) {
+        const base = moment(date || undefined).isValid()
+            ? moment(date)
+            : moment();
+        const dateStart = base.format('YYYY-MM-DD HH:mm:ss');
+        const dateEnd = base.clone().add(59, 'minutes').format('YYYY-MM-DD HH:mm:ss');
+        let query = db('ERP_CONCURRENTIPDBYCLINIC')
+            .select('CLINICCODE as cliniccode', 'OPD_DATETIME as opd_datetime')
+            .whereRaw(`
+                OPD_DATETIME BETWEEN 
+                    TO_DATE(?, 'YYYY-MM-DD HH24:MI:SS')
+                AND TO_DATE(?, 'YYYY-MM-DD HH24:MI:SS')
+                `, [dateStart, dateEnd])
+            .orderBy('CLINICCODE')
+            .orderBy('OPD_DATETIME');
+        if (limit && limit > 0 && limit <= maxLimit) {
+            query = query.limit(limit);
         }
+        const rows = await query;
+        return rows;
+    }
+    async sumOpdVisitByClinic(db, date, limit = maxLimit) {
+        const base = moment(date).isValid() ? moment(date) : moment();
+        const dateStart = base.format('YYYY-MM-DD HH:mm:ss');
+        const dateEnd = base.clone().add(59, 'minutes').format('YYYY-MM-DD HH:mm:ss');
+        return db('ERP_OPDVISITBYCLINIC')
+            .select(db.raw(`'EA0010714' as hospcode`), db.raw(`TO_DATE(?, 'YYYY-MM-DD HH24:MI:SS') as date`, [dateStart]), 'CLINICCODE as cliniccode', db.raw('SUM(CASES) as cases'), db.raw('SUM(ADMIT) as admit'))
+            .whereRaw(`
+            OPD_DATETIME BETWEEN
+                TO_DATE(?, 'YYYY-MM-DD HH24:MI:SS')
+            AND TO_DATE(?, 'YYYY-MM-DD HH24:MI:SS')
+            `, [dateStart, dateEnd])
+            .groupBy('CLINICCODE')
+            .orderBy('CLINICCODE');
+    }
+    async getVisitForMophAlert(db, date, limit = maxLimit) {
+        const base = moment(date || undefined).isValid()
+            ? moment(date)
+            : moment();
+        const dateStart = base.format('YYYY-MM-DD HH:mm:ss');
+        const dateEnd = base.clone().add(59, 'minutes').format('YYYY-MM-DD HH:mm:ss');
+        let query = db('ERP_GETVISITFORMOPHALERT')
+            .select(db.raw(`'EA0010714' as hospcode`), 'CID as cid', 'HN as hn', 'VN as vn', 'DEPARTMENT_TYPE as department_type', 'DEPARTMENT_CODE as department_code', 'DEPARTMENT_NAME as department_name', 'DATE_SERVICE as date_service', 'TIME_SERVICE as time_service')
+            .whereRaw(`
+                OPD_DATETIME BETWEEN
+                    TO_DATE(?, 'YYYY-MM-DD HH24:MI:SS')
+                AND TO_DATE(?, 'YYYY-MM-DD HH24:MI:SS')
+                `, [dateStart, dateEnd])
+            .orderBy('OPD_DATETIME', 'desc');
+        if (limit && limit > 0 && limit <= maxLimit) {
+            query = query.limit(limit);
+        }
+        const rows = await query;
+        return rows;
     }
 }
 exports.HisPmkModel = HisPmkModel;

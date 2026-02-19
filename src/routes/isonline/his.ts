@@ -308,11 +308,9 @@ const router = (fastify, { }, next) => {
       return await jwt.verify(token);
     } catch (error) {
       console.log('jwtVerify', error);
-      return null;
+    return null;
     }
   }
-
   next();
-}
-
-module.exports = router;
+};
+export default router;

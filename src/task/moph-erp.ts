@@ -159,44 +159,123 @@ export const sendWardName = async () => {
 }
 
 export const sendBedNo = async () => {
-  let result: any;
-  let countBed = 0;
+  let errorMsg = '';
+  const limitRow = 500;
+
+  // helper: unwrap ผลลัพธ์ให้เป็น array เสมอ
+  const unwrapRows = (result: any) => {
+    if (!result) return [];
+    if (Array.isArray(result)) return result;
+    if (Array.isArray(result.rows)) return result.rows;
+    if (Array.isArray(result.data)) return result.data;
+    return [];
+  };
+
+  // helper: อ่าน countBed ให้ทนต่อ key หลายแบบ
+  const readCount = (r: any) => {
+    if (!r) return 0;
+    const v =
+      r.total_beds ?? r.TOTAL_BEDS ??
+      r.total_bed ?? r.TOTAL_BED ??
+      r.row_count ?? r.ROW_COUNT ??
+      r.count ?? r.COUNT ??
+      r['COUNT(*)'] ?? r['count(*)'];
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
   try {
+    // 1) expected count (เพื่อ log/ควบคุม)
+    let expected = 0;
     if (typeof hisModel.countBedNo === 'function') {
-      result = await hisModel.countBedNo(db);
-      countBed = result?.total_bed || 0;
+      const c = await hisModel.countBedNo(db);
+      expected = readCount(c);
     }
 
-    let error = '';
+    // 2) ดึงข้อมูลจริงครั้งเดียว (ไม่พึ่ง paging args)
+    const bedsResult = await (hisModel as any).getBedNo(db);
+    const allRows: any[] = unwrapRows(bedsResult);
+
+    if (!allRows.length) {
+      console.log(moment().format('HH:mm:ss'), 'sendBedNo', 'No bed data');
+      return { statusCode: 200, message: 'No bed data' };
+    }
+
+    // ถ้า expected เป็น 0 ให้ใช้จำนวนจริงแทน
+    if (!expected) expected = allRows.length;
+
+    // 3) ส่งเป็น chunk
+    let sentTotal = 0;
     let times = 0;
-    let startRow = countBed < 500 ? -1 : 0; // น้อยกว่า 500 แถว ส่งครั้งเดียว
-    const limitRow = 500;
-    let sentResult = [];
-    do {
-      let rows: any = await hisModel.getBedNo(db, null, startRow, limitRow);
-      if (rows && rows.length) {
-        rows = rows.map(v => {
-          return {
-            ...v, hospcode: hospcode,
-            hcode5: hospcode.length == 5 ? hospcode : null,
-            hcode9: hospcode.length == 9 ? hospcode : null
-          };
-        });
-        result = await sendingToMoph('/save-bed-no', rows);
-        if (result?.status != 200 && result?.statusCode != 200) {
-          error = result?.message || result?.status || result?.statusCode || null;
-        }
-        sentResult.push({ startRow, limitRow, rows: rows.length, result });
+    const sentResult: any[] = [];
+
+    for (let startRow = 0; startRow < allRows.length; startRow += limitRow) {
+      const chunk = allRows.slice(startRow, startRow + limitRow).map(v => ({
+        ...v,
+        hospcode,
+        hcode5: hospcode.length === 5 ? hospcode : null,
+        hcode9: hospcode.length === 9 ? hospcode : null
+      }));
+
+      const result: any = await sendingToMoph('/save-bed-no', chunk);
+
+      const rawData = result?.data ?? result?.rows ?? result?.result ?? null;
+      const arr = Array.isArray(rawData) ? rawData : [];
+      const okCount = arr.filter(x => x === 1 || x === '1' || x === true).length;
+      const failCount = arr.length ? (arr.length - okCount) : 0;
+
+      console.log(
+        moment().format('HH:mm:ss'),
+        '[sendBedNo] chunk response',
+        'startRow=', startRow,
+        'size=', chunk.length,
+        'status=', result?.status ?? result?.statusCode,
+        'message=', result?.message ?? '',
+        'dataLen=', arr.length,
+        'ok=', okCount,
+        'fail=', failCount
+      );
+
+
+      if (result?.status != 200 && result?.statusCode != 200) {
+        console.log(
+          moment().format('HH:mm:ss'),
+          '[sendBedNo] API fail',
+          'startRow=', startRow,
+          'size=', chunk.length,
+          'resp=', JSON.stringify(result, null, 2)
+        );
+        errorMsg = result?.message || String(result?.status || result?.statusCode || '');
       }
-      startRow += limitRow;
+
+
+
+      sentTotal += chunk.length;
       times++;
-    } while (startRow < countBed && countBed != 0);
-    console.log(moment().format('HH:mm:ss'), `sendBedNo ${countBed} rows (${times})`, error);
-  } catch (error) {
+      sentResult.push({ startRow, limitRow, rows: chunk.length, result });
+    }
+
+    console.log(
+      moment().format('HH:mm:ss'),
+      `sendBedNo sent=${sentTotal} expected=${expected} chunks=${times}`,
+      errorMsg
+    );
+
+    // ✅ เพิ่มบรรทัดนี้ (คืนผลให้ erpAdminRequest)
+    return {
+      statusCode: errorMsg ? 500 : 200,
+      message: errorMsg || 'ok',
+      sent: sentTotal,
+      expected,
+      chunks: times
+    };
+
+  } catch (error: any) {
     console.log(moment().format('HH:mm:ss'), 'getBedNo error', error.message);
     return { statusCode: error.status || 500, message: error.message || error };
   }
-}
+};
+
 
 export const updateAlive = async () => {
   const ipServer: any = getIP();

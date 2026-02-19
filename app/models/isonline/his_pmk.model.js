@@ -16,16 +16,8 @@ class HisPmkModel {
                 .where('TABLE_SCHEMA', '=', dbName);
         }
     }
-    async testConnect(db) {
-        try {
-            const result = await db('PATIENTS').select('HN as hn')
-                .orderBy('HN', 'desc').first();
-            const connection = result && result?.hn ? true : false;
-            return { connection };
-        }
-        catch (error) {
-            throw new Error(error);
-        }
+    testConnect(db) {
+        return db('PATIENTS').select('HN as hn').limit(1);
     }
     getPerson(db, columnName, searchText) {
         columnName = columnName === 'hn' ? 'HN' : columnName;

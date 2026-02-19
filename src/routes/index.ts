@@ -13,14 +13,16 @@ const resultText = './sent_result.txt';
 const router = (fastify, { }, next) => {
   var startServer = fastify.startServerTime;
 
-  fastify.get('/', async (req: any, reply: any) => {
-    reply.send({
-      status: 200, statusCode: 200, ok: true,
-      date: moment().format('YYYY-MM-DD HH:mm:ss'),
+  fastify.get("/", async (req: any, reply: any) => {
+    return reply.send({
+      status: 200,
+      statusCode: 200,
+      ok: true,
+      date: moment().format("YYYY-MM-DD HH:mm:ss"),
       apiName: global.appDetail.name,
       version: global.appDetail.version,
       subVersion: global.appDetail.subVersion,
-      apiStartTime: global.apiStartTime
+      apiStartTime: global.apiStartTime,
     });
   })
 

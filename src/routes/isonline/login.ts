@@ -153,45 +153,6 @@ const router = (fastify, { }, next) => {
     }
   })
 
-  fastify.post('/token-status/:tokenKey', { preHandler: [fastify.authenticate] }, async (req: any, res: any) => {
-    let tokenKey = req.params.tokenKey;
-    if (tokenKey) {
-      try {
-        const result = await loginModel.checkToken(global.dbISOnline, tokenKey);
-        if (result.length) {
-
-          res.send({
-            statusCode: StatusCodes.OK,
-            status: StatusCodes.OK,
-            ok: true,
-            rows: result
-          });
-        } else {
-          res.send({
-            statusCode: StatusCodes.BAD_REQUEST,
-            status: StatusCodes.BAD_REQUEST,
-            ok: false,
-            message: 'Invalid token'
-          });
-        }
-      } catch (error) {
-        res.send({
-          statusCode: StatusCodes.INTERNAL_SERVER_ERROR,
-          status: StatusCodes.INTERNAL_SERVER_ERROR,
-          ok: false,
-          message: error.message
-        });
-      }
-    } else {
-      res.send({
-        statusCode: StatusCodes.BAD_REQUEST,
-        status: StatusCodes.BAD_REQUEST,
-        ok: false,
-        message: getReasonPhrase(StatusCodes.BAD_REQUEST)
-      });
-    }
-  })
-
   fastify.post('/token-status__/:tokenKey', { preHandler: [fastify.authenticate] }, async (req: any, res: any) => {
     verifyToken(req, res);
 

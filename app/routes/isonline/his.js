@@ -312,4 +312,4 @@ const router = (fastify, {}, next) => {
     }
     next();
 };
-module.exports = router;
+exports.default = router;

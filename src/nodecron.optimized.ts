@@ -320,8 +320,10 @@ export default async function cronjob(fastify: FastifyInstance): Promise<void> {
   // Initial tasks on first process
   if (processState.isFirstProcess) {
     updateAlive();
+   // mophAlertSurvey(); // <--- เพิ่มบรรทัดนี้ครับ เพื่อให้ Alert ทำงานทันที
     sendWardName();
-    sendBedNo();
+    sendBedNo(); //<--- ส่งทะเบียนรหัสเตียง
+    sendBedOccupancy(); // <--- ส่งยอดอัตราคงค้างในวอร์ด
   }
 
   // Schedule cron job

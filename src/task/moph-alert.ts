@@ -39,7 +39,13 @@ export const mophAlertSurvey = async (date: any = null) => {
 
 async function opdVisit(date: any = null) {
   let result: any = await hisModel.getVisitForMophAlert(db, date, true);
-  const totalRows = result?.row_count || 0;
+  console.log('CCCCC>>'+result);
+   
+  const totalRows = result?.row_count || 1568;
+   //const totalRows =  1768;
+
+   console.log('DDDDDD==========================>>'+totalRows);
+
   if (totalRows === 0) {
     console.log(moment().format('HH:mm:ss'), 'MOPH Alert survey: No opd visit data', date);
     return { statusCode: 200, date, message: 'No opd visit data' };
@@ -61,10 +67,14 @@ async function opdVisit(date: any = null) {
 
 async function getAndSend(date: any, startRow: number = -1, limitRow: number = 100) {
   let rows: any = await hisModel.getVisitForMophAlert(db, date, false, startRow, limitRow);
+
+  console.log('xxxxx'+rows)
+
   if (rows && rows.length > 0) {
     // Extract VNs from rows
     const allVns = rows.map((row: any) => row.vn).filter((vn: string) => vn);
 
+     
     // Check which VNs already exist in cache
     const existingVns = await getExistingVns(allVns, hospcode);
     console.log(moment().format('HH:mm:ss'), 'Found', existingVns.length, '/', allVns.length, 'VNs already sent in cache');

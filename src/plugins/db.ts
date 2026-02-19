@@ -1,5 +1,61 @@
 import knex from 'knex';
 
+// Import oracledb for Thick mode initialization
+const oracledb = require("oracledb");
+
+// ตัวแปรเก็บสถานะว่า Oracle Thick mode ถูก initialize แล้วหรือยัง
+let oracleThickModeInitialized = false;
+
+/**
+ * Initialize Oracle Client สำหรับ Thick mode
+ * ต้องเรียกก่อนสร้าง connection ครั้งแรก
+ */
+const initOracleThickMode = () => {
+  if (oracleThickModeInitialized) {
+    return;
+  }
+
+  try {
+    const libDir = process.env.ORACLE_CLIENT_LIB_DIR || undefined;
+    const configDir = process.env.ORACLE_CLIENT_CONFIG_DIR || undefined;
+    
+    // กำหนด options สำหรับ initOracleClient
+    const initOptions: any = {};
+    if (libDir) {
+      initOptions.libDir = libDir;
+    }
+    if (configDir) {
+      initOptions.configDir = configDir;
+    }
+    
+    // เรียก initOracleClient
+    if (Object.keys(initOptions).length > 0) {
+      oracledb.initOracleClient(initOptions);
+    } else {
+      oracledb.initOracleClient();
+    }
+    
+    oracleThickModeInitialized = true;
+    console.log('✅ Oracle Thick mode initialized successfully');
+    if (libDir) {
+      console.log(`   📁 Library directory: ${libDir}`);
+    }
+    if (configDir) {
+      console.log(`   📄 Config directory: ${configDir}`);
+    }
+  } catch (err: any) {
+    if (err.message.includes('already been initialized')) {
+      oracleThickModeInitialized = true;
+      console.log('⚠️  Oracle Thick mode already initialized');
+    } else {
+      console.error('❌ Failed to initialize Oracle Thick mode:', err.message);
+      console.error('   💡 Tip: Make sure Oracle Instant Client is installed');
+      console.error('   💡 Tip: Set ORACLE_CLIENT_LIB_DIR environment variable');
+      throw err;
+    }
+  }
+};
+
 var timezone = 'Asia/Bangkok';
 var options = {
   HIS: {
@@ -40,6 +96,7 @@ const dbConnection = (type = 'HIS') => {
   config.client = config.client ? config.client.toLowerCase() : 'mysql2';
 
   let opt: any = {};
+  
   if (config.client == 'mssql') {
     opt = {
       client: config.client,
@@ -59,16 +116,42 @@ const dbConnection = (type = 'HIS') => {
       opt.connection.encrypt = connection?.encrypt === false ? false : 'strict';
     }
   } else if (config.client == 'oracledb') {
-    process.env.NODE_ORACLEDB_DRIVER_MODE ||= process.env.DB_ORACLEDB_DRIVER_MODE || 'thin';
+    // กำหนด driver mode: 'thin' (default) หรือ 'thick'
+    const driverMode = (
+      process.env.NODE_ORACLEDB_DRIVER_MODE || 
+      process.env.DB_ORACLEDB_DRIVER_MODE || 
+      'thin'
+    ).toLowerCase();
+
+    // ถ้าเป็น thick mode ให้ initialize Oracle Client
+    if (driverMode === 'thick') {
+      console.log('🔧 Using Oracle Thick mode...');
+      initOracleThickMode();
+    } else {
+      console.log('⚡ Using Oracle Thin mode (no client libraries needed)');
+    }
+
+    // สร้าง connection string
+    const port = connection.port || 1521;
+    const connectString = `${connection.host}:${port}/${connection.database}`;
+
     opt = {
       client: 'oracledb',
       connection: {
-        connectString: `${connection.host}:${connection.port | 1521}/${connection.database}`,
+        connectString: connectString,
         user: connection.user,
         password: connection.password
       },
-      pool: { min: 0, max: 10 },
+      pool: { 
+        min: 0, 
+        max: 10 
+      },
     };
+
+    console.log(`   📊 Database: ${type}`);
+    console.log(`   🔌 Connect string: ${connectString}`);
+    console.log(`   👤 User: ${connection.user}`);
+    
   } else if (config.client == 'pg') {
     opt = {
       client: config.client,
@@ -107,6 +190,7 @@ const dbConnection = (type = 'HIS') => {
       opt.connection.charset = connection.charset.trim();
     }
   }
+  
   return knex(opt);
 };
 

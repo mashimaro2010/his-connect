@@ -1,6 +1,64 @@
+# 3.9.9
+## Feature
+  - เพิ่มการส่งข้อมูล Vital sign กรณีเปิดใช้งาน MOPH IoT Data hub
+  - เพิ่มการส่งข้อมูล Appointment กรณีเปิดใช้งาน MOPH Alert for appointment
+
+# 3.9.8
+## Feature
+  - ปรับ sql สำหรับ HospitalOS V.4
+  - draft visit model สำหรับ MOPH IoT
+  - draft appointment model สำหรับ MOPH Alert
+  - ลบ file ที่ไม่ถูกใช้งาน
+  - remove unused route (PCC, QDrug)
+  - ปรับ SQL ของ HIS
+  - ปรับการ detect Error ให้แสดง message
+  - เพิ่มการ Return src ใน header
+  - แก้ไขการตรวจสอบ allowed client IP
+
+# 3.9.7
+## Feature
+  - ปรับ SQL getReferOut, getReferResult, getProviderDr, sumReferOut ให้รองรับ Pg, MSSQL
+  - เปลี่ยน count('bedno.bedno as total_bed') เป็น count({ total_bed: 'bedno.bedno' })
+  - ปรับ https ให้ใช้ protocol http1
+  - ปรับ sql getWard ให้ใช้ std_code แยกจำนวนเตียง
+  - ปรับ SQL ให้รองรับ whereIn Array
+  - ตรวจสอบเวลาในการส่ง Alert ความพึงพอใจ
+  - เพิ่มการตรวจสอบ Config ส่วนกลางก่อนดำเนินการ
+
+# 3.9.6
+## Feature
+  - Update HospitalOS เปลี่ยนไป query ใน view แทน Table จริง
+  - ปรับ Query ให้รองรับ Hospcode 5 หรือ 9 หลัก
+  - ปรับ SQL ที่รองรับ pgSQL
+  - ปรับการ GetPerson ให้ return result แทน result[0] เนื่องจากใช้ knex ไม่ใช่ raw
+
+# 3.9.5
+## Feature
+  - เพิ่มการ set ALLOW_API_SUBNET เพื่อให้ลูกข่ายใช้งานได้ ในกรณี Set private IP ไปตรงกับ IP ต่างประเทศ
+  - ปรับ SQL HIS: iHospital
+  - เพิ่มคำอธิบายในเอกสาร (Folder document)
+
+# 3.9.4
+## Feature
+  - ปรับ SQL ให้ใช้ std code จาก ward กรณีไม่มีใน Bedno
+
+# 3.9.3
+## Feature
+  - เพิ่มการตรวจสอบและคืนค่า Request process Bedno และ Ward
+  - เพิ่มการบันทึก NodeJS version ใน Alive
+  - ปรับ SQL ให้ใช้ std code จาก ward กรณีไม่มีใน Bedno
+
+# 3.9.2
+## Feature
+  - ปรับ SQL ให้นับคงค้างตามรหัสมาตรฐาน กบรส.
+  - Request process occpancy (เฉพาะส่วนกลาง)
+  - เพิ่ม SQL ประเมินความพึงพอใจ HIS: JHCIS
+  - เพิ่มการบันทึก occupancy_date เป็นเวลาสุดท้ายของข้อมูล
+
 # 3.9.1
 ## Feature
   - ปรับ SQL getVisitForMophAlert ใน HIS iHospital ให้รองรับ IPD
+  - Filter bedno ให้เลือกเฉพาะที่มี wardcode
 ## Bug Fix
   - SQL ไม่ได้ระบุ first() ในการนับจำนวน
   - ปรับ SQL ipt.spclty!= "" เป็น ipt.spclty!= '' เนื่องจาก pg ไม่รองรับ

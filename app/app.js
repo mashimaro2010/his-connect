@@ -13,6 +13,7 @@ const moment = require("moment");
 const nodecron_optimized_1 = require("./nodecron.optimized");
 const serveStatic = require('serve-static');
 var crypto = require('crypto');
+const utils_1 = require("./middleware/utils");
 const helmet = require("@fastify/helmet");
 var serverOption = {};
 if (process.env.SSL_ENABLE && process.env.SSL_ENABLE == '1' && process.env.SSL_KEY) {
@@ -21,7 +22,6 @@ if (process.env.SSL_ENABLE && process.env.SSL_ENABLE == '1' && process.env.SSL_K
             level: 'error',
         },
         bodyLimit: 20 * 1024 * 1024,
-        http2: true,
         https: {
             key: fs.readFileSync(process.env.SSL_KEY),
             cert: fs.readFileSync(process.env.SSL_CRT)
@@ -73,8 +73,7 @@ app.decorate("authenticate", async (request, reply) => {
         request.authenDecoded = request.user;
     }
     catch (err) {
-        let ipAddr = request.headers["x-real-ip"] || request.headers["x-forwarded-for"] || request.ip;
-        console.log(moment().format('HH:mm:ss.SSS'), ipAddr, 'error:' + http_status_codes_1.StatusCodes.UNAUTHORIZED, err.message);
+        console.error(moment().format('HH:mm:ss.SSS'), request.ipAddr, 'Error client try to access API ' + http_status_codes_1.StatusCodes.UNAUTHORIZED, `message: '${err.message}'`);
         reply.send({
             statusCode: http_status_codes_1.StatusCodes.UNAUTHORIZED,
             message: (0, http_status_codes_1.getReasonPhrase)(http_status_codes_1.StatusCodes.UNAUTHORIZED)
@@ -88,8 +87,7 @@ app.decorate("checkRequestKey", async (request, reply) => {
     }
     var requestKey = crypto.createHash('md5').update(process.env.REQUEST_KEY).digest('hex');
     if (!skey || skey !== requestKey) {
-        console.log('invalid key', requestKey);
-        reply.send({
+        return reply.send({
             statusCode: http_status_codes_1.StatusCodes.UNAUTHORIZED,
             message: (0, http_status_codes_1.getReasonPhrase)(http_status_codes_1.StatusCodes.UNAUTHORIZED) + ' or invalid key'
         });
@@ -98,22 +96,31 @@ app.decorate("checkRequestKey", async (request, reply) => {
 var geoip = require('geoip-lite');
 app.addHook('onRequest', async (req, reply) => {
     const unBlockIP = process.env.UNBLOCK_IP || '??';
-    let ipAddr = req.headers["x-real-ip"] || req.headers["x-forwarded-for"] || req.ip;
+    let ipAddr = req.headers["x-forwarded-for"] || req.headers["x-real-ip"] || req.ip;
+    req.clientIP = ipAddr;
     ipAddr = ipAddr ? ipAddr.split(',') : [''];
+    ipAddr = ipAddr[0].split(':');
     req.ipAddr = ipAddr[0].trim();
+    req.ipAddr = req.ipAddr || req.clientIP;
+    let isSubnet = true;
+    if (process.env?.ALLOW_API_SUBNET || false) {
+        isSubnet = await isIPInSubnet(req.clientIP);
+    }
     var geo = geoip.lookup(req.ipAddr);
-    if (geo && geo.country && geo.country != 'TH' && req.ipAddr != process.env.HOST && !unBlockIP.includes(req.ipAddr)) {
+    req.geo = geo;
+    if (!isSubnet && geo && geo.country && geo.country != 'TH' && req.ipAddr != process.env.HOST && !unBlockIP.includes(req.ipAddr)) {
         console.log(req.ipAddr, `Unacceptable country: ${geo.country}`);
         return reply.send({ status: http_status_codes_1.StatusCodes.NOT_ACCEPTABLE, ip: req.ipAddr, message: (0, http_status_codes_1.getReasonPhrase)(http_status_codes_1.StatusCodes.NOT_ACCEPTABLE) });
     }
-    console.log(moment().format('HH:mm:ss'), geo ? geo.country : 'unk', req.ipAddr, req.url);
 });
 app.addHook('preHandler', async (request, reply) => {
+    console.log(moment().format('HH:mm:ss.SSS'), request.ipAddr, request?.geo?.country || 'unk', request.method, request.url);
 });
 app.addHook('onSend', async (request, reply, payload) => {
     const headers = {
         "Cache-Control": "no-store",
         Pragma: "no-cache",
+        src: `HIS-Connect ${version || ''}-${subVersion || ''}`
     };
     reply.headers(headers);
     return payload;
@@ -128,7 +135,7 @@ app.listen(options, (err) => {
     if (err)
         throw err;
     const instanceId = process.env.NODE_APP_INSTANCE || '0';
-    console.info(`${moment().format('HH:mm:ss')} HIS-Connect API ${global.appDetail.version}-${global.appDetail.subVersion} started on port ${options.port}, PID: ${process.pid}`);
+    console.info(`${moment().format('HH:mm:ss')} HIS-Connect API ${global.appDetail.version}-${global.appDetail.subVersion} started on port ${options.port}, PID: ${process.pid} with NodeJS: ${process.version || ''}, Instance: ${instanceId}`);
 });
 async function connectDB() {
     const dbClient = process.env.HIS_DB_CLIENT;
@@ -162,7 +169,7 @@ async function connectDB() {
         else {
             date = result[0]?.[0]?.date;
         }
-        console.info(`   🔗 PID:${process.pid} >> HIS DB server '${dbClient}' connected, date on DB server: `, moment(date).format('YYYY-MM-DD HH:mm:ss'));
+        console.info(`   🔗 PID:${process.pid} >> HIS DB server '${dbClient}' connected, date/time on DB server:`, moment(date).format('YYYY-MM-DD HH:mm:ss'));
     }
     catch (error) {
         console.error(`   ❌ PID:${process.pid} >> HIS DB server '${dbClient}' connect error: `, error.message);
@@ -170,10 +177,22 @@ async function connectDB() {
 }
 async function checkConfigFile() {
     if (fs.existsSync('./config')) {
-        console.info(`✅ Check 'config' file exist: Successfully`);
+        console.info(`✅ PID:${process.pid} >> Check local 'config' file exist: Successfully`);
     }
     else {
-        console.error(`❌ Check 'config' file exist: Not found, please create file 'config' and try again.`);
+        console.error(`❌ PID:${process.pid} >> Check local 'config' file exist: Not found, please create file 'config' and try again.`);
         process.exit(1);
     }
+}
+async function isIPInSubnet(ip) {
+    if (!ip || ip === '::1' || ip === '127.0.0.1' || ip === 'localhost') {
+        return true;
+    }
+    let localIP = (0, utils_1.getIP)();
+    if (!localIP || !localIP?.ip) {
+        return true;
+    }
+    localIP = (localIP?.ip || '').split('.');
+    const isValidIP = ip.includes(localIP.slice(0, 3).join('.'));
+    return isValidIP;
 }

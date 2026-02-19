@@ -4,6 +4,8 @@ exports.erpAdminRequest = exports.updateAlive = exports.sendBedNo = exports.send
 const moment = require("moment");
 const moph_refer_1 = require("../middleware/moph-refer");
 const hismodel_1 = require("./../routes/his/hismodel");
+const os_1 = require("os");
+const fs = require('fs');
 const utils_1 = require("../middleware/utils");
 const packageJson = require('../../package.json');
 const dbConnection = require('../plugins/db');
@@ -11,14 +13,16 @@ let db = dbConnection('HIS');
 const hisProvider = process.env.HIS_PROVIDER || '';
 const hisVersion = process.env.HIS_VERSION || '';
 const hospcode = process.env.HOSPCODE || '';
+let hospitalConfig = null;
 const sendBedOccupancy = async (dateProcess = null) => {
+    hospitalConfig = await (0, moph_refer_1.getHospitalConfig)();
     let whatUTC = Intl?.DateTimeFormat().resolvedOptions().timeZone || '';
     let currDate;
     if (whatUTC == 'UTC' || whatUTC == 'Etc/UTC') {
-        currDate = moment().locale('TH').add(7, 'hours').subtract(10, 'minutes').startOf('hour').format('YYYY-MM-DD HH:mm:ss');
+        currDate = moment().locale('TH').add(7, 'hours').subtract(1, 'hours').startOf('hour').format('YYYY-MM-DD HH:mm:ss');
     }
     else {
-        currDate = moment().locale('TH').subtract(30, 'minutes').startOf('hour').format('YYYY-MM-DD HH:mm:ss');
+        currDate = moment().locale('TH').subtract(1, 'hours').startOf('hour').format('YYYY-MM-DD HH:mm:ss');
     }
     let date = dateProcess || currDate;
     let dateOpd = date;
@@ -36,23 +40,27 @@ const sendBedOccupancy = async (dateProcess = null) => {
         ]);
         dateOpd = moment(dateOpd).add(1, 'day').format('YYYY-MM-DD');
     } while (dateOpd <= currDate);
+    console.log('-'.repeat(70));
     return { clinicResult, wardResult, opdResult };
 };
 exports.sendBedOccupancy = sendBedOccupancy;
 const sendBedOccupancyByWard = async (date) => {
     try {
+        const occupancy_date = moment(date).locale('TH').endOf('hour').format('YYYY-MM-DD HH:mm:ss');
         let rows = await hismodel_1.default.concurrentIPDByWard(db, date);
         if (rows && rows.length) {
-            rows = rows.map(v => {
-                return { ...v, date, hospcode, his: hisProvider || '' };
+            rows = rows.map((v) => {
+                return { ...v, occupancy_date, date, hospcode, his: hisProvider || '' };
             });
             const result = await (0, moph_refer_1.sendingToMoph)('/save-occupancy-rate-by-ward', rows);
             console.log(moment().format('HH:mm:ss'), 'send Occ Rate by ward', date, result.status || '', result.message || '', rows.length, 'rows');
         }
+        console.log('-'.repeat(70));
         return rows;
     }
     catch (error) {
         console.error(moment().format('HH:mm:ss'), 'sendBedOccupancy error by ward', date, error.message);
+        console.log('-'.repeat(70));
         return false;
     }
 };
@@ -134,16 +142,19 @@ const sendWardName = async () => {
                 return { ...v, hospcode: process.env.HOSPCODE || '' };
             });
             const result = await (0, moph_refer_1.sendingToMoph)('/save-ward', rows);
-            console.log(moment().format('HH:mm:ss'), 'sendWardName', result.status || '', result.message || '', rows.length);
+            console.log(moment().format('HH:mm:ss'), 'sendWardName', result.status || '', result.message || '', rows.length, 'rows');
+            console.log('-'.repeat(70));
             return result;
         }
         else {
             console.log(moment().format('HH:mm:ss'), 'sendWardName', 'No ward data');
+            console.log('-'.repeat(70));
             return { statusCode: 200, message: 'No ward data' };
         }
     }
     catch (error) {
         console.log(moment().format('HH:mm:ss'), 'getWard error', error.message);
+        console.log('-'.repeat(70));
         return [];
     }
 };
@@ -189,6 +200,7 @@ const sendBedNo = async () => {
             expected = allRows.length;
         let sentTotal = 0;
         let times = 0;
+<<<<<<< HEAD
         const sentResult = [];
         for (let startRow = 0; startRow < allRows.length; startRow += limitRow) {
             const chunk = allRows.slice(startRow, startRow + limitRow).map(v => ({
@@ -206,9 +218,32 @@ const sendBedNo = async () => {
             if (result?.status != 200 && result?.statusCode != 200) {
                 console.log(moment().format('HH:mm:ss'), '[sendBedNo] API fail', 'startRow=', startRow, 'size=', chunk.length, 'resp=', JSON.stringify(result, null, 2));
                 errorMsg = result?.message || String(result?.status || result?.statusCode || '');
+=======
+        let startRow = countBed < 500 ? -1 : 0;
+        const limitRow = 500;
+        let sentResult = [];
+        do {
+            let rows = await hismodel_1.default.getBedNo(db, null, startRow, limitRow);
+            if (rows && rows.length) {
+                rows = rows
+                    .filter((row) => row.wardcode != null && row.wardcode != '')
+                    .map((v) => {
+                    return {
+                        ...v, hospcode: hospcode,
+                        hcode5: hospcode.length == 5 ? hospcode : null,
+                        hcode9: hospcode.length == 9 ? hospcode : null
+                    };
+                });
+                result = await (0, moph_refer_1.sendingToMoph)('/save-bed-no', rows);
+                if (result?.status != 200 && result?.statusCode != 200) {
+                    error = result?.message || result?.status || result?.statusCode || null;
+                }
+                sentResult.push({ startRow, limitRow, rows: rows.length, result });
+>>>>>>> 289330f363bf99d79a28333b4bccdc3497c32bb5
             }
             sentTotal += chunk.length;
             times++;
+<<<<<<< HEAD
             sentResult.push({ startRow, limitRow, rows: chunk.length, result });
         }
         console.log(moment().format('HH:mm:ss'), `sendBedNo sent=${sentTotal} expected=${expected} chunks=${times}`, errorMsg);
@@ -219,9 +254,16 @@ const sendBedNo = async () => {
             expected,
             chunks: times
         };
+=======
+        } while (startRow < countBed && countBed != 0);
+        console.log(moment().format('HH:mm:ss'), `sendBedNo ${countBed} rows (${times} times)`, error);
+        console.log('-'.repeat(70));
+        return { statusCode: 200, sentResult };
+>>>>>>> 289330f363bf99d79a28333b4bccdc3497c32bb5
     }
     catch (error) {
         console.log(moment().format('HH:mm:ss'), 'getBedNo error', error.message);
+        console.log('-'.repeat(70));
         return { statusCode: error.status || 500, message: error.message || error };
     }
 };
@@ -229,6 +271,7 @@ exports.sendBedNo = sendBedNo;
 const updateAlive = async () => {
     const ipServer = (0, utils_1.getIP)();
     try {
+        const apiEnv = await detectRuntimeEnvironment();
         let data = {
             api_date: global.apiStartTime,
             server_date: moment().format('YYYY-MM-DD HH:mm:ss'),
@@ -237,7 +280,11 @@ const updateAlive = async () => {
             subversion: packageJson.subVersion || '',
             port: process.env.PORT || 0,
             ip: ipServer.ip,
-            his: hisProvider, ssl: process.env?.SSL_ENABLE || null,
+            host_type: apiEnv || 'host',
+            nodejs: process.version || '',
+            platform: (0, os_1.platform)() || '',
+            os_version: (0, os_1.release)() || '',
+            his: hisProvider, ssl: process.env?.SSL_ENABLE || 0,
         };
         const result = await (0, moph_refer_1.updateHISAlive)(data);
         const status = result.status == 200 || result.statusCode == 200 ? true : false;
@@ -245,12 +292,14 @@ const updateAlive = async () => {
             console.log(moment().format('HH:mm:ss'), '✅ Sent API Alive status result', result.status || '', result.statusCode || '', result?.message || '');
         }
         else {
-            console.log(moment().format('HH:mm:ss'), '❌ Sent API Alive status result', result.status || '', result.statusCode || '', result?.message || '');
+            console.error(moment().format('HH:mm:ss'), '❌ Sent API Alive status result', result.status || '', result.statusCode || '', result?.message || '');
         }
+        console.log('-'.repeat(70));
         return result;
     }
     catch (error) {
-        console.log(moment().format('HH:mm:ss'), '❌ Sent API Alive status error:', error?.status || error?.statusCode || '', error?.message || error || '');
+        console.error(moment().format('HH:mm:ss'), '❌ Sent API Alive status error:', error?.status || error?.statusCode || '', error?.message || error || '');
+        console.log('-'.repeat(70));
         return [];
     }
 };
@@ -258,43 +307,43 @@ exports.updateAlive = updateAlive;
 const erpAdminRequest = async () => {
     try {
         const result = await (0, moph_refer_1.checkAdminRequest)();
-        if (result.status == 200 || result.statusCode == 200) {
-            const rows = result?.rows || result?.data || [];
+        const rows = result?.rows || result?.data || [];
+        if (rows && rows.length > 0) {
             let requestResult;
-            for (let req of rows) {
-                if (req.request_type == 'bed') {
+            for (let row of rows) {
+                if (row.request_type == 'bed') {
                     requestResult = await (0, exports.sendBedNo)();
-                    console.log('ERP admin request get bed no.', requestResult?.statusCode || requestResult?.status || '', requestResult?.message || '');
-                    await (0, moph_refer_1.updateAdminRequest)({
-                        request_id: req.request_id,
-                        status: requestResult?.statusCode == 200 || requestResult?.status == 200 ? 'success' : `failed ${requestResult?.status || requestResult?.statusCode || ''}`,
-                        isactive: 0
-                    });
+                    console.log(moment().format('HH:mm:ss'), 'ERP admin request get bed no.', requestResult?.statusCode || requestResult?.status || '', requestResult?.message || '');
                 }
-                else if (req.request_type == 'ward') {
+                else if (row.request_type == 'ward') {
                     requestResult = await (0, exports.sendWardName)();
-                    console.log('ERP admin request get ward name.', requestResult?.statusCode || requestResult?.status || '', requestResult?.message || '');
-                    await (0, moph_refer_1.updateAdminRequest)({
-                        request_id: req.request_id,
-                        status: requestResult?.statusCode == 200 || requestResult?.status == 200 ? 'success' : `failed ${requestResult?.status || requestResult?.statusCode || ''}`,
-                        isactive: 0
-                    });
+                    console.log(moment().format('HH:mm:ss'), 'ERP admin request get ward name.', requestResult?.statusCode || requestResult?.status || '', requestResult?.message || '');
                 }
-                else if (req.request_type == 'alive') {
+                else if (row.request_type == 'alive') {
                     requestResult = await (0, exports.updateAlive)();
-                    console.log('ERP admin request send alive status.', requestResult?.statusCode || requestResult?.status || '', requestResult?.message || '');
+                    console.log(moment().format('HH:mm:ss'), 'ERP admin request send alive status.', requestResult?.statusCode || requestResult?.status || '', requestResult?.message || '');
                 }
-                else if (req.request_type == 'occupancy') {
+                else if (row.request_type == 'occupancy') {
+                    requestResult = await (0, exports.sendBedOccupancy)();
+                    console.log(moment().format('HH:mm:ss'), 'ERP admin request occupancy', requestResult?.statusCode || requestResult?.status || '', requestResult?.message || '');
                 }
+                const updateResult = await (0, moph_refer_1.updateAdminRequest)({
+                    request_id: row.request_id,
+                    status: requestResult?.statusCode == 200 || requestResult?.status == 200 ? 'success' : `failed ${requestResult?.status || requestResult?.statusCode || ''}`,
+                    isactive: 0
+                });
+                console.log(moment().format('HH:mm:ss'), 'ERP admin request update status', updateResult?.statusCode || updateResult?.status || '', updateResult?.message || '');
             }
         }
         else {
             console.log(moment().format('HH:mm:ss'), 'No admin request', result.status || result?.statusCode || '', result?.data?.message || result?.message || '');
         }
+        console.log('-'.repeat(70));
         return result;
     }
     catch (error) {
         console.log(moment().format('HH:mm:ss'), 'Admin Request error', error.message);
+        console.log('-'.repeat(70));
         return [];
     }
 };
@@ -352,4 +401,33 @@ function toSnakeCase(value) {
         return value;
     }
     return value.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
+}
+async function detectRuntimeEnvironment() {
+    let env = "host";
+    if (fs.existsSync("/.dockerenv")) {
+        env = "docker";
+    }
+    else {
+        try {
+            const cgroup = fs.readFileSync("/proc/1/cgroup", "utf8");
+            if (/docker|containerd/i.test(cgroup)) {
+                env = "docker";
+            }
+            if (/kubepods/i.test(cgroup)) {
+                env = "kubernetes";
+            }
+        }
+        catch { }
+    }
+    const r = (0, os_1.release)().toLowerCase();
+    try {
+        const version = fs.readFileSync("/proc/version", "utf8").toLowerCase();
+        if (r.includes("microsoft") ||
+            r.includes("wsl") ||
+            version.includes("microsoft")) {
+            env = "wsl";
+        }
+    }
+    catch { }
+    return env;
 }

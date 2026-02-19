@@ -1,0 +1,160 @@
+import moment = require('moment');
+console.log(moment().format('HH:mm:ss'), process.pid, 'Start MOPH IoT Task');
+
+import { Knex } from 'knex';
+import { sendingToMoph, getHospitalConfig } from '../middleware/moph-refer';
+import hisModel from './../routes/his/hismodel';
+const dbConnection = require('../plugins/db');
+const cacheDbModule = require('../plugins/cache-db');
+const cacheDb = cacheDbModule.default || cacheDbModule;
+let db: Knex = dbConnection('HIS');
+let hospitalConfig: any = null;
+
+// สร้างตาราง iot_service ถ้ายังไม่มี
+async function createIotServiceTable() {
+  try {
+    const hasTable = await cacheDb.schema.hasTable('iot_service');
+    if (!hasTable) {
+      await cacheDb.schema.createTable('iot_service', (table) => {
+        table.increments('id').primary();
+        table.string('seq', 50).notNullable().unique();
+        table.string('cid', 13);
+        table.date('date_serv');
+        table.timestamp('sent_at').defaultTo(cacheDb.fn.now());
+        table.index(['date_serv']);
+        table.index(['sent_at']);
+      });
+      console.log(moment().format('HH:mm:ss'), 'Created iot_service table');
+    }
+  } catch (error) {
+    console.error('Error creating iot_service table:', error);
+  }
+}
+
+// ลบข้อมูลย้อนหลัง 48 ชั่วโมง
+async function cleanOldRecords() {
+  try {
+    const twoDaysAgo = moment().subtract(48, 'hours').format('YYYY-MM-DD HH:mm:ss');
+    const deleted = await cacheDb('iot_service')
+      .where('sent_at', '<', twoDaysAgo)
+      .delete();
+    if (deleted > 0) {
+      console.log(moment().format('HH:mm:ss'), `Cleaned ${deleted} old IoT records before ${twoDaysAgo}`);
+    }
+  } catch (error) {
+    console.error('Error cleaning old IoT records:', error);
+  }
+}
+
+// ตรวจสอบว่าข้อมูลถูกส่งไปแล้วหรือยัง
+async function isAlreadySent(seq: string): Promise<boolean> {
+  try {
+    const record = await cacheDb('iot_service')
+      .where({ seq })
+      .first();
+    return !!record;
+  } catch (error) {
+    console.error('Error checking sent record:', error);
+    return false;
+  }
+}
+
+// บันทึกประวัติการส่ง
+async function markAsSent(row: any) {
+  try {
+    await cacheDb('iot_service')
+      .insert({
+        seq: row.seq,
+        cid: row.cid,
+        date_serv: row.date_serv
+      })
+      .onConflict('seq')
+      .ignore();
+  } catch (error) {
+    console.error('Error marking as sent:', error);
+  }
+}
+
+const processIoT = async (date: any = null) => {
+  // สร้างตารางและลบข้อมูลเก่า
+  await createIotServiceTable();
+  await cleanOldRecords();
+  hospitalConfig = await getHospitalConfig();
+  if (!hospitalConfig || !hospitalConfig.configure || !hospitalConfig.configure?.iot_service || hospitalConfig.configure?.iot_service?.enable != 1) {
+    console.error(moment().format('HH:mm:ss'), 'MOPH IoT Process Stop: IoT Service Disabled');
+    return false;
+  }
+
+  date = date || moment();
+  const dateStart = moment(date).subtract(6, 'hours').startOf('hour').format('YYYY-MM-DD HH:mm:ss');
+  const dateEnd = moment(date).subtract(6, 'hours').endOf('hour').format('YYYY-MM-DD HH:mm:ss');
+
+  console.log(' ');
+  const result = await getData(dateStart, dateEnd);
+  console.log('-'.repeat(70));
+  return result;
+}
+
+async function getData(dateStart: string, dateEnd: string) {
+  try {
+    let date = moment(dateStart).format('YYYY-MM-DD');
+    do {
+      let opdVisit = await hisModel.getService(db, 'date_serv', date);
+      let rows = (opdVisit ? (opdVisit || []) : []).filter((row: any) =>
+        (row?.typeout || row?.TYPEOUT) == '1' &&
+        (row.cid || row.CID) &&
+        ((row.cid || row.CID).trim().length == 13)
+      ); // typeout 1=ตรวจแล้ว 2=Admit, cid ต้องเป็นเลข 13 หลัก (หมอพร้อม Alert)
+      if (rows.length > 0) {
+        let sentResults = [];
+        console.log(moment().format('HH:mm:ss'), 'MOPH IoT Process:', date, ' founded:', opdVisit.length, 'rows');
+
+        let recno = 0;
+        for (let row of rows) {
+          for (const key in row) {
+            if (key !== key.toLowerCase()) {
+              row[key.toLowerCase()] = row[key];
+              delete row[key];
+            }
+          }
+          if (Number(row?.sbp || 0) + Number(row?.dbp || 0) + Number(row?.weight || 0)
+            + Number(row?.height || 0) + Number(row?.pr || 0) + Number(row?.rr || 0)
+            + Number(row?.o2sat || 0) + Number(row?.btemp || 0) + Number(row?.waist || 0)
+            == 0) {
+            continue;
+          }
+
+          // Check if seq already sent
+          const alreadySent = await isAlreadySent(row.seq);
+          if (alreadySent) {
+            continue;
+          }
+
+          row.dob = row.dob || row.birth || null;
+          row.dob = moment(row.dob).isValid() ? moment(row.dob).format('YYYY-MM-DD') : null;
+          row.date_serv = moment(row.date_serv).format('YYYY-MM-DD');
+          if (row.time_servlength > 3 && row.time_serv.indexOf(':') === -1) {
+            row.time_serv = row.time_serv ? row.time_serv.replace(/(\d{2})(\d{2})(\d{2})/, '$1:$2:$3') : '';
+          }
+          row.datetime_serv = moment(row.date_serv + ' ' + (row.time_serv || '')).format('YYYY-MM-DD HH:mm:ss');
+          const sentResult = await sendingToMoph('/save-service', row);
+
+          // บันทึกประวัติการส่ง
+          if (sentResult && sentResult.statusCode === 200) {
+            await markAsSent(row);
+          }
+
+          sentResults.push({ rowno: ++recno, ...sentResult, vn: row.seq });
+        };
+        console.log(moment().format('HH:mm:ss'), 'MOPH IoT Process Date:', date, 'service:', opdVisit.length, 'records, Sent:', sentResults.length, 'records');
+      } else {
+        console.log(moment().format('HH:mm:ss'), 'MOPH IoT Process Date:', date, 'No Records Found');
+      }
+      date = moment(date).add(1, 'day').format('YYYY-MM-DD');
+    } while (date <= moment(dateEnd).format('YYYY-MM-DD'))
+  } catch (error) {
+    throw error;
+  }
+}
+
+export default { processIoT };

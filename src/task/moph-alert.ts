@@ -1,5 +1,5 @@
 import moment = require("moment");
-import { sendingToMoph } from "../middleware/moph-refer";
+import { getHospitalConfig, sendingToMoph } from "../middleware/moph-refer";
 import hisModel from './../routes/his/hismodel';
 import { Knex } from 'knex';
 import {
@@ -13,6 +13,7 @@ const dbConnection = require('../plugins/db');
 let db: Knex = dbConnection('HIS');
 const hospcode = process.env.HOSPCODE || '';
 const limitRow = 100;
+let hospitalConfig: any = null;
 
 // Initialize cache database on module load
 let cacheInitialized = false;
@@ -25,14 +26,22 @@ export const mophAlertSurvey = async (date: any = null) => {
       cacheInitialized = true;
     }
 
+    hospitalConfig = await getHospitalConfig();
+    if (!hospitalConfig || !hospitalConfig?.hospital_satisfaction || hospitalConfig?.hospital_satisfaction != 1) {
+      console.error(moment().format('HH:mm:ss'), 'MOPH Alert Process Stop: Appointment Service Disabled');
+      return false;
+    }
+
     date = date ? moment(date).format('YYYY-MM-DD') : moment().subtract(2, 'hours').format('YYYY-MM-DD');
     await opdVisit(date);
     if (moment().format('HH:mm') < '02:00') {
       date = moment().subtract(1, 'hours').format('YYYY-MM-DD');
       await opdVisit(date);
     }
+    console.log('-'.repeat(70));
   } catch (error) {
     console.log(moment().format('HH:mm:ss'), 'getVisitForMophAlert error', error.message);
+    console.log('-'.repeat(70));
     return [];
   }
 }
@@ -90,13 +99,21 @@ async function getAndSend(date: any, startRow: number = -1, limitRow: number = 1
     console.log(moment().format('HH:mm:ss'), 'Sending', filteredRows.length, 'new VNs to MOPH');
 
     // Add hospcode to rows
-    const rowsToSend = filteredRows.map((item: any) => { return { ...item, date_service: moment(item.date_service).format('YYYY-MM-DD'), hospcode }; });
+    const await_minute = hospitalConfig.satisfaction_await || 60;
+    const rowsToSend = filteredRows.map((item: any) => {
+      return {
+        ...item,
+        await_minute,
+        date_alert_request: moment(item.date_service).add(await_minute, 'minutes').format('YYYY-MM-DD HH:mm:ss'),
+        date_service: moment(item.date_service).format('YYYY-MM-DD'),
+        hospcode
+      };
+    });
 
     // Send to MOPH
     let result: any = await sendingToMoph('/save-moph-alert', rowsToSend);
     console.log(moment().format('HH:mm:ss'), `send moph alert ${rowsToSend.length} rows, result status:`, result.statusCode || '', result.message || '');
-    result.resultList = result?.resultList.map(item => { delete item?.result; return item; })
-    console.log(result);
+    result.resultList = result?.resultList.map((item: any) => { delete item?.result; return item; })
 
     // If successful, insert sent VNs into cache
     if (result.statusCode === 200) {

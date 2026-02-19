@@ -29,7 +29,7 @@ let crontabConfig: any = {
 };
 let db: Knex;
 
-const processSend = (request: any, reply: any, dbConn: Knex, config = {}) => {
+const processSend = async (request: any, reply: any, dbConn: Knex, config = {}) => {
   db = dbConn;
   crontabConfig = { ...crontabConfig, ...config };
   crontabConfig['client_ip'] = '127.0.0.1';
@@ -41,11 +41,15 @@ const processSend = (request: any, reply: any, dbConn: Knex, config = {}) => {
       crontabConfig['client_ip'] = request.ip || crontabConfig['client_ip'];
     }
   }
+  console.log(moment().format('HH:mm:ss'), `Start 'nRefer' task on PID ${process.pid}`);
+  let result: any;
   if (crontabConfig?.service == 'ipdChecking') {
-    return ipdChecking(request, reply);
+    result = await ipdChecking(request, reply);
   } else {
-    return sendMoph(request, reply, db);  // ข้อมูลปัจจุบัน
+    result = await sendMoph(request, reply, db);  // ข้อมูลปัจจุบัน
   }
+  console.log('-'.repeat(70));
+  return result;
 }
 
 async function sendMoph(req, reply, db) {
@@ -59,7 +63,7 @@ async function sendMoph(req, reply, db) {
     nReferToken = resultToken.token;
     sentContent += `token ${nReferToken}\r`;
   } else {
-    console.log('Get nRefer token error', resultToken.message);
+    console.error('Get nRefer token error', resultToken.message);
     sentContent += `get token Error:` + JSON.stringify(resultToken) + `\r`;
     writeResult(resultText, sentContent);
     return false;
@@ -86,8 +90,6 @@ async function sendMoph(req, reply, db) {
       oldDate = moment(oldDate).add(1, 'days').format('YYYY-MM-DD');
     }
   }
-
-  console.log(moment().format('HH:mm:ss'), process.pid, '='.repeat(60));
   var [referOut, referResult] = await sendRefer(db, dateNow);
   return { date: dateNow, referOut, referResult };
 }
@@ -103,7 +105,7 @@ async function sendRefer(db: Knex, date: any) {
 async function getReferOut(db: Knex, date: any) {
   try {
     const referout = await hisModel.getReferOut(db, date, hcode, null);
-    // console.log('******** >> refer out', date, referout.length, ' cases');
+    console.log('   >> nRefer Out', date, referout.length, ' cases');
     if (!referout || referout.length == 0) {
       return '';
     }
@@ -147,6 +149,7 @@ async function getReferOut(db: Knex, date: any) {
         row[fld.toLowerCase()] = row[fld];
       }
 
+      row.hospcode = row?.hospcode || hcode;
       const hn = row.hn || row.pid;
       const seq = row.seq || row.vn;
       sentContent += (index + 1) + '. refer no.' + row.referid + ', hn ' + hn + ', seq ' + seq + '\r';
@@ -173,10 +176,10 @@ async function getReferOut(db: Knex, date: any) {
       }
     }
     await getProvider(db, drList, sentResult);
-    console.log(' nrefer sent ', process.env.HOSPCODE, sentResult.message || sentResult);
+    console.log('  nRefer sent ', process.env.HOSPCODE, sentResult.message || sentResult);
     return referout;
   } catch (error) {
-    console.log('getReferOut, crontab error:', error.message)
+    console.error('getReferOut, crontab error:', error.message)
     sentContent += moment().format('HH:mm:ss.SSS') + 'crontab error ' + error.message + '\r\r';
     return [];
   }
@@ -199,7 +202,7 @@ async function getReferIn(db, date) {
   };
   try {
     const referResult = await hisModel.getReferResult(db, date, hcode);
-    // console.log('******** >> refer in', date, referResult.length, ' cases');
+    console.log('   >> nRefer In', date, referResult.length, ' cases');
     if (!referResult || referResult.length == 0) {
       return '';
     }
@@ -332,6 +335,7 @@ async function sendReferOut(row, sentResult) {
     const dAdmit = row.datetime_admit || row.datetime_admit || null;
     const dRefer = row.datetime_refer || row.REFER_DATE || row.refer_date || dServe || null;
     const destHosp = row.hosp_destination;
+    row.physicalexam += ((row?.lab_text || '') ? '\n' + row.lab_text : '') + (row?.other_text ? '\n' + row.other_text : '');
 
     const data = {
       HOSPCODE: hcode,
@@ -349,9 +353,9 @@ async function sendReferOut(row, sentResult) {
       CLINIC_REFER: row.clinic_refer || '',
       CHIEFCOMP: row.chiefcomp || row.cc || '',
       PHYSICALEXAM: row.physicalexam || row.pe || '',
-      PH: row.PH || row.ph || '',
-      PI: row.PI || row.pi || '',
-      FH: row.FH || row.fh || '',
+      PH: row.ph || '',
+      PI: row.pi || '',
+      FH: row.fh || '',
       DIAGFIRST: row.diagfirst || '',
       DIAGLAST: row.diaglast || '',
       PSTATUS: row.ptstatus || '',
@@ -370,13 +374,12 @@ async function sendReferOut(row, sentResult) {
     }
 
     const saveResult: any = await sendingToMoph('/save-refer-history', data)
-    // const saveResult1: any = await referSending('/save-refer-history', data);
     if (saveResult.statusCode == 200) {
       sentResult.referout.success += 1;
     } else {
       sentResult.referout.fail += 1;
       sentResult.referout.vnFail.push(SEQ);
-      console.log('save-refer-history', data.REFERID, saveResult.message);
+      console.error('save-refer-history', data.REFERID, saveResult.message);
     }
     sentContent += '  - refer_history ' + data.REFERID + ' ' + (saveResult.result || saveResult.message) + '\r';
     return saveResult;
@@ -435,9 +438,9 @@ async function getPerson(db, pid, sentResult) {
   try {
 
     const d_update = moment().format('YYYY-MM-DD HH:mm:ss');
-    const rows = await hisModel.getPerson(db, 'hn', pid, hcode);
+    let rows = await hisModel.getPerson(db, 'hn', pid, hcode);
     sentContent += '  - person = ' + rows.length + '\r';
-    if (rows && rows.length) {
+    if (rows && rows.length > 0) {
       for (const row of rows) {
         // transform column name to lowercase
         for (let fld in row) {
@@ -818,14 +821,14 @@ async function ipdChecking(req: any, res: any) {
           await getAdmission(db, 'vn', vn);
         }
       }
-      console.log(`Send IPD backward: ${date} founed: ${rows.length} rows, IPD sent: ${anList.length} rows`);
+      console.log(moment().format('HH:mm:ss'), `Send IPD backward: ${date} founed: ${rows.length} rows, IPD sent: ${anList.length} rows`);
       date = moment(date).add(1, 'day').format('YYYY-MM-DD');
     }
     while (date <= dateEnd && date <= today);
     console.log(sentResult);
     return sentResult;
   } catch (error) {
-    console.log('ipdChecking', error.message)
+    console.log(moment().format('HH:mm:ss'), 'ipdChecking', error.message)
   }
 }
 

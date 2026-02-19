@@ -2,13 +2,23 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.HisIHospitalModel = void 0;
 const moment = require("moment");
-const maxLimit = 250;
+const maxLimit = 1000;
 const hcode = process.env.HOSPCODE;
 let hisHospcode = process.env.HOSPCODE;
 const dbClient = process.env.HIS_DB_CLIENT ? process.env.HIS_DB_CLIENT.toLowerCase() : 'mysql2';
 class HisIHospitalModel {
     check() {
         return true;
+    }
+    async tableExist(db, tableName, dbName = '') {
+        if (dbName) {
+            return await db.schema
+                .withSchema(dbName)
+                .hasTable(tableName);
+        }
+        else {
+            return await db.schema.hasTable(tableName);
+        }
     }
     async testConnect(db) {
         let result;
@@ -43,17 +53,27 @@ class HisIHospitalModel {
             .orderBy('clinic')
             .limit(maxLimit);
     }
-    getWard(db, wardCode = '', wardName = '') {
-        let sql = db('lib_ward').where('code', '!=', 0);
+    async getWard(db, wardCode = '', wardName = '') {
+        let sql = db('lib_ward').where('code', '<>', 0);
         if (wardCode) {
             sql.where('code', wardCode);
         }
         else if (wardName) {
             sql.whereLike('ward', `%${wardName}%`);
         }
-        return sql
-            .select('code as wardcode', 'ward as wardname', 'standard as std_code', 'bed_nm as bed_normal', 'bed_sp as bed_special', 'ward_type', 'ward_typesub as ward_subtype', 'isactive')
+        const result = await sql
+            .select('code as wardcode', 'ward as wardname', 'standard as std_code', 'moph_code', 'bed_nm as bed_normal', 'bed_sp as bed_special', db.raw(`CASE WHEN SUBSTRING(moph_code,4,1) = '2' THEN bed_nm ELSE 0 END as bed_icu`), db.raw(`CASE WHEN SUBSTRING(moph_code,4,1) = '3' THEN bed_nm ELSE 0 END as bed_semi`), db.raw(`CASE WHEN SUBSTRING(moph_code,4,1) = '4' THEN bed_nm ELSE 0 END as bed_stroke`), db.raw(`CASE WHEN SUBSTRING(moph_code,4,1) = '5' THEN bed_nm ELSE 0 END as bed_burn`), db.raw(`CASE WHEN SUBSTRING(moph_code,4,3) = '604' THEN bed_nm ELSE 0 END as bed_minithanyaruk`), db.raw(`CASE WHEN SUBSTRING(moph_code,4,3) = '610' THEN bed_nm ELSE 0 END as lr`), db.raw(`CASE WHEN SUBSTRING(moph_code,4,3) = '611' THEN bed_nm ELSE 0 END as clip`), db.raw(`CASE WHEN SUBSTRING(moph_code,4,3) IN ('601','602') THEN bed_nm ELSE 0 END as imc`), db.raw(`CASE WHEN SUBSTRING(moph_code,4,3) = '607' THEN bed_nm ELSE 0 END as homeward`), 'ward_type', 'ward_typesub as ward_subtype', 'isactive')
             .limit(maxLimit);
+        let rows = result.map(row => {
+            return {
+                ...row,
+                std_code: row.moph_code || row.std_code,
+                bed_normal: row.bed_normal - (row.bed_icu + row.bed_semi +
+                    row.bed_stroke + row.bed_burn + row.bed_minithanyaruk + row.lr +
+                    row.clip + row.imc + row.homeward)
+            };
+        });
+        return rows;
     }
     getDr(db, code, license_no) {
         if (code || license_no) {
@@ -122,12 +142,18 @@ class HisIHospitalModel {
     }
     getPerson(db, columnName, searchText, hospCode = hisHospcode) {
         columnName = columnName === 'cid' ? 'no_card' : columnName;
-        return db('hospdata.view_patient')
+        let query = db('hospdata.view_patient');
+        if (Array.isArray(searchText)) {
+            query.whereIn(columnName, searchText);
+        }
+        else {
+            query.where(columnName, "=", searchText);
+        }
+        return query
             .select(db.raw('"' + hisHospcode + '" as hospcode'))
             .select(db.raw('4 as typearea'))
             .select('no_card as cid', 'hn as pid', 'title as prename', 'name', 'name as fname', 'surname as lname', 'hn', 'birth', 'sex', 'marry_std as mstatus', 'blood as abogroup', 'occ_std as occupation_new', 'race_std as race', 'nation_std as nation', 'religion_std as religion', 'edu_std as education', 'tel as telephone', 'lastupdate as d_update')
-            .where(columnName, "=", searchText)
-            .limit(maxLimit);
+            .limit(5000);
     }
     getAddress(db, columnName, searchNo, hospCode = hisHospcode) {
         columnName = columnName === 'cid' ? 'CID' : columnName;
@@ -137,17 +163,20 @@ class HisIHospitalModel {
             .orderBy('ADDRESSTYPE')
             .limit(maxLimit);
     }
-    getService(db, columnName, searchText, hospCode = hisHospcode) {
+    async getService(db, columnName, searchText, hospCode = hisHospcode) {
         columnName = columnName === 'visitNo' ? 'vn' : columnName;
+        columnName = columnName === 'cid' ? 'no_card' : columnName;
         columnName = columnName === 'date_serv' ? 'visit.date' : `visit.${columnName}`;
-        return db('view_opd_visit as visit')
-            .leftJoin('hospdata.er_triage as triage', 'visit.vn', 'triage.vn')
-            .select(db.raw('"' + hisHospcode + '" as hospcode'))
-            .select('visit.hn as pid', 'visit.hn', 'visit.vn as seq', 'visit.date as date_serv', 'visit.hospmain as main', 'visit.hospsub as hsub', 'visit.refer as referinhosp', db.raw(" case when visit.time='' or visit.time='08:00' then visit.time_opd else visit.time end as time_serv "), db.raw('"1" as servplace'), 'visit.nurse_cc as chiefcomp', 'visit.pi_dr as presentillness', 'visit.pe_dr as physicalexam', 'visit.nurse_ph as pasthistory', 'visit.t as btemp', 'visit.bp as sbp', 'visit.bp1 as dbp', 'visit.weigh as weight', 'visit.high as height', 'visit.puls as pr', 'visit.rr', db.raw(`IF(visit.dr > 0, CONCAT("ว",visit.dr),'') as provider`), 'visit.no_card as cid', 'visit.pttype_std as instype', 'visit.no_ptt as insid', 'triage.e as gcs_e', 'triage.v as gcs_v', 'triage.m as gcs_m', 'triage.gcs', 'triage.o2sat', 'triage.pupil_lt as pupil_left', 'triage.pupil_rt as pupil_right', db.raw('IF(visit.period>1,2,1) AS intime'), 'visit.cost as price', 'visit.opd_result_hdc as typeout', db.raw('IF(visit.hospmain=? OR visit.`add`=?,1,2) AS location', [hcode, '4001']))
-            .select(db.raw('concat(visit.date, " " , visit.time) as d_update'))
-            .where(columnName, searchText)
-            .orderBy('visit.date', 'desc')
-            .limit(maxLimit);
+        let query = db('view_opd_visit as visit')
+            .leftJoin('hospdata.er_triage as triage', 'visit.vn', 'triage.vn');
+        if (Array.isArray(searchText)) {
+            query = query.whereIn(columnName, searchText);
+        }
+        else {
+            query = query.where(columnName, searchText);
+        }
+        query = query.select(db.raw('? as hospcode', [hisHospcode]), 'visit.hn as pid', 'visit.hn', 'visit.no_card as cid', 'visit.title as prename', 'visit.name as fname', 'visit.surname as lname', 'visit.birth as dob', 'visit.sex', 'visit.vn as seq', 'visit.date as date_serv', 'visit.hospmain as main', 'visit.hospsub as hsub', 'visit.waistline as waist', 'visit.refer as referinhosp', db.raw(" case when visit.time='' or visit.time='08:00' then visit.time_reg else visit.time end as time_serv "), db.raw('? as servplace', [1]), 'visit.nurse_cc as chiefcomp', 'visit.pi_dr as presentillness', 'visit.pe_dr as physicalexam', 'visit.nurse_ph as pasthistory', 'visit.t as btemp', 'visit.bp as sbp', 'visit.bp1 as dbp', 'visit.weigh as weight', 'visit.high as height', 'visit.puls as pr', 'visit.rr', 'visit.bmi', db.raw(`IF(visit.dr > 0, CONCAT("ว",visit.dr),'') as provider`), 'visit.pttype_std as instype', 'visit.no_ptt as insid', 'triage.e as gcs_e', 'triage.v as gcs_v', 'triage.m as gcs_m', 'triage.gcs', 'triage.o2sat', 'triage.pupil_lt as pupil_left', 'triage.pupil_rt as pupil_right', db.raw('IF(visit.period>1,2,1) AS intime'), 'visit.cost as price', 'visit.opd_result_hdc as typeout', db.raw('IF(visit.hospmain=? OR visit.`add`=?,1,2) AS location', [hcode, '4001']), db.raw('concat(visit.date, " " , visit.time) as d_update'));
+        return await query.orderBy('visit.date', 'desc');
     }
     getDiagnosisOpd(db, visitno, hospCode = hisHospcode) {
         return db('view_opd_dx_hdc as dx')
@@ -287,7 +316,7 @@ class HisIHospitalModel {
         columnName = columnName === 'datedisc' ? 'disc' : columnName;
         let sql = db('view_ipd_ipd as ipd');
         if (['no_card', 'vn', 'hn', 'an'].indexOf(columnName) < 0) {
-            sql.whereRaw('LENGTH(ipd.refer)=5');
+            sql.whereRaw('LENGTH(ipd.refer) IN (5,9)');
         }
         if (Array.isArray(searchValue)) {
             sql.whereIn(columnName, searchValue);
@@ -318,9 +347,14 @@ class HisIHospitalModel {
         columnName = columnName === 'an' ? 'dx.AN' : columnName;
         columnName = columnName === 'pid' ? 'dx.PID' : columnName;
         columnName = columnName === 'cid' ? 'dx.CID' : columnName;
-        return db('view_ipd_dx_hdc as dx')
-            .select('dx.*', db.raw(' "IT" as codeset'))
-            .where(columnName, searchNo)
+        let query = db('view_ipd_dx_hdc as dx');
+        if (Array.isArray(searchNo)) {
+            query.whereIn(columnName, searchNo);
+        }
+        else {
+            query.where(columnName, searchNo);
+        }
+        return query.select('dx.*', db.raw(' "IT" as codeset'))
             .where('DIAGTYPE', '!=', '5')
             .orderBy('AN')
             .orderBy('DIAGTYPE')
@@ -341,18 +375,29 @@ class HisIHospitalModel {
         }
     }
     getProcedureIpd(db, an, hospCode = hisHospcode) {
-        return db('view_ipd_op as op')
-            .select(db.raw('"' + hcode + '" as HOSPCODE'))
+        let query = db('view_ipd_op as op');
+        if (Array.isArray(an)) {
+            query.whereIn('an', an);
+        }
+        else {
+            query.where('an', an);
+        }
+        return query.select(db.raw('? as HOSPCODE', [hcode]))
             .select('hn as PID', 'an as AN', 'vn as SEQ')
             .select(db.raw('concat(admite, " " , timeadmit) as DATETIME_ADMIT'))
             .select('clinic_std as WARDSTAY', 'op as PROCEDCODE', 'desc as PROCEDNAME', 'dr as PROVIDER', 'price as SERVICEPRICE', 'cid as CID', 'lastupdate as D_UPDATE')
-            .where('an', an)
             .limit(maxLimit);
     }
     getChargeIpd(db, an, hospCode = hisHospcode) {
-        return db('ipd_charge')
-            .select(db.raw('"' + hcode + '" as hospcode'))
-            .where({ an })
+        let query = db('ipd_charge');
+        if (Array.isArray(an)) {
+            query.whereIn('an', an);
+        }
+        else {
+            query.where('an', an);
+        }
+        return query
+            .select(db.raw('? as hospcode', [hcode]))
             .limit(maxLimit);
     }
     async getDrugIpd(db, an, hospCode = hisHospcode) {
@@ -382,12 +427,82 @@ class HisIHospitalModel {
             .where('hn', hn)
             .limit(maxLimit);
     }
-    getAppointment(db, visitNo, hospCode = hisHospcode) {
-        return db('view_opd_fu')
-            .select('*')
-            .select(db.raw('"' + hcode + '" as hospcode'))
-            .where('vn', "=", visitNo)
-            .limit(maxLimit);
+    async getAppointment(db, columnName, searchValue, lastupdateLimit = null) {
+        const colMap = {
+            fu_date: "fu_date",
+            visit_date: "date",
+            visitno: "vn",
+            visitNo: "vn",
+            hn: "hn",
+            vn: "vn",
+            an: "an"
+        };
+        const mapped = colMap[columnName] || null;
+        if (!mapped) {
+            throw new Error(`Invalid columnName: ${columnName}`);
+        }
+        if (columnName === "fu_date" || columnName === "visit_date") {
+            if (Array.isArray(searchValue)) {
+                searchValue = searchValue.map((d) => moment(d).format("YYYY-MM-DD"));
+            }
+            else {
+                searchValue = moment(searchValue).format("YYYY-MM-DD");
+            }
+        }
+        lastupdateLimit = lastupdateLimit || moment().subtract(120, 'minutes').format('YYYY-MM-DD HH:mm:ss');
+        let query = db({ o: "view_opd_fu" });
+        if (Array.isArray(searchValue)) {
+            query = query.whereIn(mapped, searchValue);
+        }
+        else {
+            query = query.where(mapped, searchValue);
+        }
+        query = query
+            .select([
+            db.raw("? as hospcode", [hisHospcode]),
+            db.raw("ref AS appointment_id"),
+            "hn", "an", "vn", db.raw("? as visit_vn", [null]), 'cid',
+            db.raw("0 AS isvisited"),
+            db.raw("CONCAT(date,' ',time) AS visit_date"),
+            db.raw("fu_date AS apdate"),
+            db.raw("fu_time AS aptime"),
+            db.raw("fu_dep AS clinic"),
+            db.raw("fu_dep_name AS clinicName"),
+            db.raw('fu_dep_standard as clinic_standard'),
+            db.raw("fu_dr AS dr_code"),
+            db.raw("fu_dr_name AS dr_name"),
+            db.raw("dr AS provider"),
+            db.raw("CONCAT(title,name,' ',surname) AS pt_name"),
+            db.raw("? AS cause", [null]),
+            "detail_js",
+            db.raw("? AS prepare_text", ['']),
+            db.raw("? AS lab", [null]),
+            db.raw("? AS xray", [null]),
+            "fu_dep_building", "fu_dep_floor",
+            db.raw("? AS apvisit_area", [null]),
+            db.raw("CASE WHEN iscancel = 1 THEN 0 ELSE 1 END AS isactive"),
+            db.raw("iscancel as isactive"),
+            db.raw("lastupdate as d_update")
+        ])
+            .whereNotNull("fu_date")
+            .whereRaw("date < fu_date")
+            .whereRaw("(lastupdate < ? OR (lastupdate IS NULL AND inp_date < ?))", [lastupdateLimit, lastupdateLimit]);
+        const rows = await query.orderBy(["fu_date", "time"]).limit(5000);
+        for (let row of rows) {
+            let detailList = Array.isArray(row.detail_js) ? row.detail_js : JSON.parse(row.detail_js);
+            detailList = (detailList || []).filter((item) => item?.text && typeof item.text === 'string' && item.text.trim() !== '');
+            for (let detail of detailList) {
+                row.prepare_text = (row.prepare_text ? '\n' : '')
+                    + (detailList.length > 1 ? '-' : '')
+                    + detail.text;
+            }
+            row.apvisit_area = (row.fu_dep_building ? row.fu_dep_building : '') + (row.fu_dep_floor ? ' ชั้น ' + row.fu_dep_floor : '');
+            row.visit_date = moment(row.visit_date).format('YYYY-MM-DD HH:mm:ss');
+            delete row.fu_dep_building;
+            delete row.fu_dep_floor;
+            delete row.detail_js;
+        }
+        return rows;
     }
     async getReferHistory(db, columnName, searchNo, hospCode = hisHospcode) {
         columnName = columnName === 'visitNo' ? 'refer.vn' : ('refer.' + columnName);
@@ -451,7 +566,7 @@ class HisIHospitalModel {
             .select(db.raw(`(select hcode from sys_hospital) as HOSPCODE`), 'visit.refer as HOSP_SOURCE', 'visit.refer_no as REFERID_SOURCE', db.raw('concat(visit.refer,visit.refer_no) as REFERID_PROVINCE'), 'visit.date as DATETIME_IN', 'visit.hn as PID_IN', 'visit.vn as SEQ_IN', 'visit.ipd_an as AN_IN', 'visit.no_card as CID_IN', 'refer_in.refer_in as REFERID', 'visit.dx1 as detail', 'visit.dr_note as reply_diagnostic', 'visit.lastupdate as reply_date', db.raw('1 as REFER_RESULT'), db.raw(`concat(visit.date,' ',visit.time) as D_UPDATE`), 'visit.dr as PROVIDER', 'visit.dr')
             .where('visit.date', visitDate)
             .where('visit.refer', '!=', hospCode)
-            .where(db.raw('length(visit.refer)=5'))
+            .where(db.raw('length(visit.refer) IN (5,9)'))
             .groupBy('visit.vn')
             .limit(maxLimit);
     }
@@ -472,30 +587,6 @@ class HisIHospitalModel {
             .where(columnName, "=", searchNo)
             .limit(maxLimit);
     }
-    countBedNo(db) {
-        return db('app_nis.bed').count('* as total_bed').first();
-    }
-    async getBedNo(db, bedno = null, start = -1, limit = 1000) {
-        let query = db('app_nis.bed');
-        if (start >= 0) {
-            query = query.offset(start).limit(limit);
-        }
-        query = query.select('bed_id', 'ward_code as wardcode', 'bed_name', db.raw(`CONCAT(ward_code, '-',bed_number) as bedno`), 'room as roomno', 'bed_status as isactive', db.raw(`
-            CASE 
-                WHEN std_type = 2 THEN 'ICU'
-                WHEN std_type = 3 THEN 'SEMIICU'
-                WHEN std_type = 4 THEN 'STROKE'
-                WHEN bed_type = 2 THEN 'S'
-                WHEN bed_type = 5 THEN 'CLIP'
-                WHEN bed_name LIKE '%รอคลอด%' THEN 'LR'
-                ELSE 'N'
-            END as bed_type
-        `)).where('bed_status', 1);
-        if (bedno) {
-            query = query.whereRaw(`CONCAT(ward_code, '-',bed_number) = ?`, bedno);
-        }
-        return await query;
-    }
     sumReferIn(db, dateStart, dateEnd) {
         return db('opd_visit as visit')
             .select('visit.date')
@@ -503,34 +594,57 @@ class HisIHospitalModel {
             .whereBetween('visit.date', [dateStart, dateEnd])
             .whereNotNull('visit.refer')
             .where('visit.refer', '!=', hisHospcode)
-            .whereRaw('LENGTH(visit.refer)=5')
+            .whereRaw('LENGTH(visit.refer) IN (5,9)')
             .whereNotNull('visit.vn')
             .groupBy('visit.date');
     }
+    countBedNo(db) {
+        return db('app_nis.bed').count('* as total_bed').first();
+    }
+    async getBedNo(db, bedno = null, start = -1, limit = 1000) {
+        let query = db('app_nis.bed')
+            .leftJoin('hospdata.lib_ward as ward', 'bed.ward_code', 'ward.code');
+        if (start >= 0) {
+            query = query.offset(start).limit(limit);
+        }
+        query = query.select('bed.bed_id', 'bed.ward_code as wardcode', 'bed.bed_name', db.raw(`CONCAT(bed.ward_code, '-', bed.bed_number) as bedno`), 'bed.room as roomno', 'bed.moph_code as std_code', 'ward.moph_code as ward_std_code', 'bed.bed_status as isactive')
+            .whereNotNull('bed.ward_code')
+            .whereNotIn('bed.ward_code', ['0', '']);
+        if (bedno) {
+            query = query.whereRaw(`CONCAT(bed.ward_code, '-',bed.bed_number) = ?`, bedno);
+        }
+        const result = await query;
+        return result.map((item) => {
+            item = {
+                ...item,
+                std_code: item.std_code ? item.std_code.trim() : (item.ward_std_code || '199100')
+            };
+            delete item.ward_std_code;
+            return item;
+        });
+    }
     concurrentIPDByWard(db, date) {
         const dateAdmitLimit = moment(date).subtract(1, 'year').format('YYYY-MM-DD');
-        let sql = db('view_ipd_ipd as ip')
-            .select('ip.ward as wardcode', 'ward_name as wardname', db.raw('SUBSTRING(ip.ward_std,2,2) as clinic'));
         const dateStart = moment(date).locale('TH').startOf('hour').format('YYYY-MM-DD HH:mm:ss');
         const dateEnd = moment(date).locale('TH').endOf('hour').format('YYYY-MM-DD HH:mm:ss');
-        sql = sql.select(db.raw('SUM(CASE WHEN ip.dateadm BETWEEN ? AND ? THEN 1 ELSE 0 END) AS new_case', [dateStart, dateEnd]), db.raw('SUM(CASE WHEN ip.datedsc BETWEEN ? AND ? THEN 1 ELSE 0 END) AS discharge', [dateStart, dateEnd]), db.raw("SUM(CASE WHEN ip.refer IS NOT NULL AND ip.refer != '' THEN 1 ELSE 0 END) AS referin"), db.raw('SUM(CASE WHEN ip.datedsc BETWEEN ? AND ? THEN adjrw ELSE 0 END) AS adjrw', [dateStart, dateEnd]), db.raw('SUM(CASE WHEN ip.datedsc BETWEEN ? AND ? AND LEFT(ip.stat_dsc,1) IN ("8","9") THEN 1 ELSE 0 END) AS death', [dateStart, dateEnd]))
+        let sql = db('view_ipd_ipd4 as ip')
+            .select('ip.ward as wardcode', 'ward_name as wardname', db.raw('SUBSTRING(ip.ward_std,2,2) as clinic'), db.raw('SUM(CASE WHEN ip.dateadm BETWEEN ? AND ? THEN 1 ELSE 0 END) AS new_case', [dateStart, dateEnd]), db.raw('SUM(CASE WHEN ip.disc_and_estimate BETWEEN ? AND ? THEN 1 ELSE 0 END) AS discharge', [dateStart, dateEnd]), db.raw("SUM(CASE WHEN ip.refer IS NOT NULL AND ip.refer != '' THEN 1 ELSE 0 END) AS referin"), db.raw('SUM(CASE WHEN ip.disc_and_estimate BETWEEN ? AND ? THEN adjrw ELSE 0 END) AS adjrw', [dateStart, dateEnd]), db.raw(`SUM(CASE WHEN SUBSTRING(ip.moph_code,4,1)='2' THEN 1 ELSE 0 END) AS icu`), db.raw(`SUM(CASE WHEN SUBSTRING(ip.moph_code,4,1)='3' THEN 1 ELSE 0 END) AS semi`), db.raw(`SUM(CASE WHEN SUBSTRING(ip.moph_code,4,1)='5' THEN 1 ELSE 0 END) AS burn`), db.raw(`SUM(CASE WHEN SUBSTRING(ip.moph_code,4,3) IN ('601','602') THEN 1 ELSE 0 END) AS imc`), db.raw(`SUM(CASE WHEN SUBSTRING(ip.moph_code,4,3)='604' THEN 1 ELSE 0 END) AS minithanyaruk`), db.raw(`SUM(CASE WHEN SUBSTRING(ip.moph_code,4,3)='607' THEN 1 ELSE 0 END) AS homeward`), db.raw('SUM(CASE WHEN ip.disc_and_estimate BETWEEN ? AND ? AND LEFT(ip.stat_dsc,1) IN ("8","9") THEN 1 ELSE 0 END) AS death', [dateStart, dateEnd]))
             .count('* as cases')
             .sum('ip.pday as los')
             .whereRaw('ip.dateadm <= ?', [dateStart])
-            .whereRaw('(ip.disc IS NULL OR ip.datedsc BETWEEN ? AND ?)', [dateStart, dateEnd])
+            .whereRaw('(ip.disc_and_estimate IS NULL OR ip.disc_and_estimate BETWEEN ? AND ?)', [dateStart, dateEnd])
             .andWhere(function () {
-            this.whereNull('ip.disc').orWhere('ip.disc', '>=', date);
+            this.whereNull('ip.disc_and_estimate').orWhere('ip.disc_and_estimate', '>=', dateEnd);
         });
         sql = sql.where('ip.admite', '>', dateAdmitLimit)
             .whereRaw('ip.ward is not null and ip.ward>0');
-        console.log(sql.groupBy('ip.ward').orderBy('ip.ward').toString());
         return sql.groupBy('ip.ward').orderBy('ip.ward');
     }
     concurrentIPDByClinic(db, date) {
         const dateAdmitLimit = moment(date).subtract(1, 'year').format('YYYY-MM-DD');
         date = moment(date).format('YYYY-MM-DD');
         let sql = db('view_ipd_ipd as ip')
-            .select('clinic_hdc_name as clinicname', db.raw('CASE WHEN clinic_hdc_code IS NULL OR clinic_hdc_code=\'\' OR clinic_hdc_code=\'99\' THEN SUBSTRING(ward_std,2,2) ELSE clinic_hdc_code END AS cliniccode'), db.raw('SUM(CASE WHEN ip.admite = ? THEN 1 ELSE 0 END) AS new_case', [date]), db.raw('SUM(CASE WHEN ip.disc = ? THEN 1 ELSE 0 END) AS discharge', [date]), db.raw('SUM(CASE WHEN ip.refer IS NOT NULL AND ip.refer != \'\' THEN 1 ELSE 0 END) AS referin'), db.raw('SUM(CASE WHEN ip.disc = ? THEN adjrw ELSE 0 END) AS adjrw', [date]), db.raw('SUM(CASE WHEN LEFT(ip.stat_dsc,1) IN ("8","9") THEN 1 ELSE 0 END) AS death'))
+            .select('clinic_hdc_name as clinicname', db.raw('CASE WHEN clinic_hdc_code IS NULL OR clinic_hdc_code=\'\' OR clinic_hdc_code=\'99\' THEN SUBSTRING(ward_std,2,2) ELSE clinic_hdc_code END AS cliniccode'), db.raw('SUM(CASE WHEN ip.admite = ? THEN 1 ELSE 0 END) AS new_case', [date]), db.raw('SUM(CASE WHEN ip.disc = ? THEN 1 ELSE 0 END) AS discharge', [date]), db.raw('SUM(CASE WHEN ip.refer IS NOT NULL AND ip.refer != \'\' THEN 1 ELSE 0 END) AS referin'), db.raw('SUM(CASE WHEN ip.disc = ? THEN adjrw ELSE 0 END) AS adjrw', [date]), db.raw(`SUM(CASE WHEN SUBSTRING(ip.moph_code,4,1)='2' THEN 1 ELSE 0 END) AS icu`), db.raw(`SUM(CASE WHEN SUBSTRING(ip.moph_code,4,1)='3' THEN 1 ELSE 0 END) AS semi`), db.raw(`SUM(CASE WHEN SUBSTRING(ip.moph_code,4,1)='4' THEN 1 ELSE 0 END) AS stroke`), db.raw(`SUM(CASE WHEN SUBSTRING(ip.moph_code,4,1)='5' THEN 1 ELSE 0 END) AS burn`), db.raw(`SUM(CASE WHEN SUBSTRING(ip.moph_code,4,3) IN ('601','602') THEN 1 ELSE 0 END) AS imc`), db.raw(`SUM(CASE WHEN SUBSTRING(ip.moph_code,4,3)='604' THEN 1 ELSE 0 END) AS minithanyaruk`), db.raw(`SUM(CASE WHEN SUBSTRING(ip.moph_code,4,3)='607' THEN 1 ELSE 0 END) AS homeward`), db.raw('SUM(CASE WHEN LEFT(ip.stat_dsc,1) IN ("8","9") THEN 1 ELSE 0 END) AS death'))
             .count('* as cases')
             .sum('ip.pday as los')
             .whereBetween('ip.admite', [dateAdmitLimit, date])

@@ -4,11 +4,16 @@ exports.default = cronjob;
 const moment = require("moment");
 const child_process_1 = require("child_process");
 const moph_erp_1 = require("./task/moph-erp");
+const moph_iot_1 = require("./task/moph-iot");
 const moph_alert_1 = require("./task/moph-alert");
+const moph_starter_1 = require("./task/moph-starter");
+const moph_appointment_1 = require("./task/moph-appointment");
 const shell = require("shelljs");
 const cron = require('node-cron');
 const referCrontab = require('./routes/refer/crontab');
 const instanceId = process.env.NODE_APP_INSTANCE ? +process.env.NODE_APP_INSTANCE + 1 : null;
+let hospitalConfig = null;
+let onProcess = {};
 const processState = {
     firstProcessPid: 0,
     pm2Name: 'unknown',
@@ -33,6 +38,10 @@ function getMinutesSinceMidnight() {
 }
 function getCurrentMinute() {
     return moment().minutes() === 0 ? 60 : moment().minutes();
+}
+function getRemainingMinutes(currentMinute, interval) {
+    const remainder = currentMinute % interval;
+    return remainder === 0 ? 0 : interval - remainder;
 }
 function getPM2Processes() {
     const now = Date.now();
@@ -122,6 +131,7 @@ function logJobStatus() {
     Object.entries(jobQueue).forEach(([jobName, state]) => {
         if (state.lastRun) {
             console.log(`${getTimestamp()} Last process time '${jobName}' ${state.lastRun.format('HH:mm:ss')}`);
+            console.log('-'.repeat(70));
         }
     });
 }
@@ -139,6 +149,7 @@ async function getmophUrl() {
     global.mophService = await require('./routes/main/crontab')(global.mophService, {});
 }
 async function cronjob(fastify) {
+    hospitalConfig = await moph_starter_1.default.getMophConfig();
     updateProcessState();
     const secondNow = moment().seconds();
     const timingSch = `${secondNow} * * * * *`;
@@ -147,7 +158,10 @@ async function cronjob(fastify) {
     const timingSchedule = configureTimingSchedules();
     if (processState.isFirstProcess) {
         console.log(`${getTimestamp()} Start API for Hospcode ${process.env.HOSPCODE}`);
-        console.log(`   ⬜ Random time for alive: every ${timeRandom} minutes, Occupancy: xx:${timeRandom}, ward/bed update: ${hourRandom}:${timeRandom}:${secondNow}`);
+        console.log(`   ⏰ Random time config:`);
+        console.log(`      - Alive/Alert: Every ${timeRandom} minutes`);
+        console.log(`      - Bed Occupancy: At minute ${timeRandom}`);
+        console.log(`      - Ward/Bed Update: At ${hourRandom}:${timeRandom}:${secondNow}`);
         logScheduledServices(timingSchedule);
     }
     if (processState.isFirstProcess) {
@@ -162,22 +176,38 @@ async function cronjob(fastify) {
         const minuteSinceLastNight = getMinutesSinceMidnight();
         const minuteNow = moment().get('minute');
         if (processState.isFirstProcess) {
-            if (minuteSinceLastNight % 2 === 1) {
+            if (minuteSinceLastNight > 0 && minuteSinceLastNight % 2 === 1) {
                 logJobStatus();
             }
             if (minuteNow != 0 && minuteNow % timeRandom == 0) {
                 (0, moph_erp_1.updateAlive)();
                 (0, moph_alert_1.mophAlertSurvey)();
             }
-            if (minuteSinceLastNight % 2 == 0) {
+            if (minuteSinceLastNight > 0 && minuteSinceLastNight % 2 == 0) {
                 (0, moph_erp_1.erpAdminRequest)();
             }
             if (minuteNow == timeRandom) {
                 (0, moph_erp_1.sendBedOccupancy)();
             }
+            if (!onProcess?.mophAppointment && minuteSinceLastNight > 0 && minuteSinceLastNight % timeRandom == 0) {
+                onProcess.mophAppointment = true;
+                moph_appointment_1.default.process().then(() => {
+                    onProcess.mophAppointment = false;
+                });
+            }
+            if (!onProcess?.mophIot && minuteSinceLastNight > 0 && minuteSinceLastNight % timeRandom == 0) {
+                onProcess.mophIot = true;
+                moph_iot_1.default.processIoT().then(() => {
+                    onProcess.mophIot = false;
+                });
+            }
             if (moment().hour() == hourRandom && minuteNow == timeRandom) {
+                console.log(`   --> 📅 Daily Task: Executing Ward Name & Bed No...`);
                 (0, moph_erp_1.sendWardName)();
                 (0, moph_erp_1.sendBedNo)();
+            }
+            if (moment().hour() == 1 && minuteNow == timeRandom) {
+                moph_iot_1.default.processIoT();
             }
             if (timingSchedule['nrefer'].autosend &&
                 minuteSinceLastNight % timingSchedule['nrefer'].minute === 0) {
@@ -199,7 +229,7 @@ async function cronjob(fastify) {
                     await doAutoSend(req, res, 'isonline', './routes/isonline/crontab', timingSchedule);
                 });
             }
-            if (minuteNow === 60) {
+            if (minuteNow === 0 || minuteNow === 60) {
                 runJob('getmophUrl', getmophUrl);
             }
         }

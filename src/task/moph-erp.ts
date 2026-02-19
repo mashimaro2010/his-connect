@@ -1,7 +1,9 @@
 import moment = require("moment");
-import { sendingToMoph, updateHISAlive, checkAdminRequest, updateAdminRequest, taskFunction } from "../middleware/moph-refer";
+import { sendingToMoph, updateHISAlive, checkAdminRequest, updateAdminRequest, taskFunction, getHospitalConfig } from "../middleware/moph-refer";
 import hisModel from './../routes/his/hismodel';
 import { Knex } from 'knex';
+import { platform, release } from "os";
+const fs = require('fs');
 import { getIP } from "../middleware/utils";
 const packageJson = require('../../package.json');
 
@@ -10,14 +12,19 @@ let db: Knex = dbConnection('HIS');
 const hisProvider = process.env.HIS_PROVIDER || '';
 const hisVersion = process.env.HIS_VERSION || '';
 const hospcode = process.env.HOSPCODE || '';
+let hospitalConfig: any = null;
 
 export const sendBedOccupancy = async (dateProcess: any = null) => {
+  hospitalConfig = await getHospitalConfig();
+
   let whatUTC = Intl?.DateTimeFormat().resolvedOptions().timeZone || '';
   let currDate: any;
+
+  // ประมวลหลัง 1 ชั่วโมงเสมอ
   if (whatUTC == 'UTC' || whatUTC == 'Etc/UTC') {
-    currDate = moment().locale('TH').add(7, 'hours').subtract(10, 'minutes').startOf('hour').format('YYYY-MM-DD HH:mm:ss');
+    currDate = moment().locale('TH').add(7, 'hours').subtract(1, 'hours').startOf('hour').format('YYYY-MM-DD HH:mm:ss');
   } else {
-    currDate = moment().locale('TH').subtract(30, 'minutes').startOf('hour').format('YYYY-MM-DD HH:mm:ss');
+    currDate = moment().locale('TH').subtract(1, 'hours').startOf('hour').format('YYYY-MM-DD HH:mm:ss');
   }
 
   let date = dateProcess || currDate;
@@ -39,22 +46,26 @@ export const sendBedOccupancy = async (dateProcess: any = null) => {
     dateOpd = moment(dateOpd).add(1, 'day').format('YYYY-MM-DD');
   } while (dateOpd <= currDate);
 
+  console.log('-'.repeat(70));
   return { clinicResult, wardResult, opdResult };
 }
 
 const sendBedOccupancyByWard = async (date: any) => {
   try {
+    const occupancy_date = moment(date).locale('TH').endOf('hour').format('YYYY-MM-DD HH:mm:ss');
     let rows: any = await hisModel.concurrentIPDByWard(db, date);
     if (rows && rows.length) {
-      rows = rows.map(v => {
-        return { ...v, date, hospcode, his: hisProvider || '' };
+      rows = rows.map((v: any) => {
+        return { ...v, occupancy_date, date, hospcode, his: hisProvider || '' };
       });
       const result: any = await sendingToMoph('/save-occupancy-rate-by-ward', rows);
       console.log(moment().format('HH:mm:ss'), 'send Occ Rate by ward', date, result.status || '', result.message || '', rows.length, 'rows');
     }
+    console.log('-'.repeat(70));
     return rows;
   } catch (error) {
     console.error(moment().format('HH:mm:ss'), 'sendBedOccupancy error by ward', date, error.message);
+    console.log('-'.repeat(70));
     return false;
   }
 }
@@ -146,14 +157,17 @@ export const sendWardName = async () => {
         return { ...v, hospcode: process.env.HOSPCODE || '' };
       });
       const result: any = await sendingToMoph('/save-ward', rows);
-      console.log(moment().format('HH:mm:ss'), 'sendWardName', result.status || '', result.message || '', rows.length);
+      console.log(moment().format('HH:mm:ss'), 'sendWardName', result.status || '', result.message || '', rows.length, 'rows');
+      console.log('-'.repeat(70));
       return result;
     } else {
       console.log(moment().format('HH:mm:ss'), 'sendWardName', 'No ward data');
+      console.log('-'.repeat(70));
       return { statusCode: 200, message: 'No ward data' };
     }
   } catch (error) {
     console.log(moment().format('HH:mm:ss'), 'getWard error', error.message);
+    console.log('-'.repeat(70));
     return [];
   }
 }
@@ -207,6 +221,7 @@ export const sendBedNo = async () => {
     // 3) ส่งเป็น chunk
     let sentTotal = 0;
     let times = 0;
+<<<<<<< HEAD
     const sentResult: any[] = [];
 
     for (let startRow = 0; startRow < allRows.length; startRow += limitRow) {
@@ -246,12 +261,35 @@ export const sendBedNo = async () => {
           'resp=', JSON.stringify(result, null, 2)
         );
         errorMsg = result?.message || String(result?.status || result?.statusCode || '');
+=======
+    let startRow = countBed < 500 ? -1 : 0; // น้อยกว่า 500 แถว ส่งครั้งเดียว
+    const limitRow = 500;
+    let sentResult = [];
+    do {
+      let rows: any = await hisModel.getBedNo(db, null, startRow, limitRow);
+      if (rows && rows.length) {
+        rows = rows
+          .filter((row: any) => row.wardcode != null && row.wardcode != '')
+          .map((v: any) => {
+            return {
+              ...v, hospcode: hospcode,
+              hcode5: hospcode.length == 5 ? hospcode : null,
+              hcode9: hospcode.length == 9 ? hospcode : null
+            };
+          });
+        result = await sendingToMoph('/save-bed-no', rows);
+        if (result?.status != 200 && result?.statusCode != 200) {
+          error = result?.message || result?.status || result?.statusCode || null;
+        }
+        sentResult.push({ startRow, limitRow, rows: rows.length, result });
+>>>>>>> 289330f363bf99d79a28333b4bccdc3497c32bb5
       }
 
 
 
       sentTotal += chunk.length;
       times++;
+<<<<<<< HEAD
       sentResult.push({ startRow, limitRow, rows: chunk.length, result });
     }
 
@@ -271,7 +309,15 @@ export const sendBedNo = async () => {
     };
 
   } catch (error: any) {
+=======
+    } while (startRow < countBed && countBed != 0);
+    console.log(moment().format('HH:mm:ss'), `sendBedNo ${countBed} rows (${times} times)`, error);
+    console.log('-'.repeat(70));
+    return { statusCode: 200, sentResult };
+  } catch (error) {
+>>>>>>> 289330f363bf99d79a28333b4bccdc3497c32bb5
     console.log(moment().format('HH:mm:ss'), 'getBedNo error', error.message);
+    console.log('-'.repeat(70));
     return { statusCode: error.status || 500, message: error.message || error };
   }
 };
@@ -280,6 +326,8 @@ export const sendBedNo = async () => {
 export const updateAlive = async () => {
   const ipServer: any = getIP();
   try {
+    const apiEnv = await detectRuntimeEnvironment();
+
     let data = {
       api_date: global.apiStartTime,
       server_date: moment().format('YYYY-MM-DD HH:mm:ss'),
@@ -288,9 +336,12 @@ export const updateAlive = async () => {
       subversion: packageJson.subVersion || '',
       port: process.env.PORT || 0,
       ip: ipServer.ip,
-      his: hisProvider, ssl: process.env?.SSL_ENABLE || null,
+      host_type: apiEnv || 'host',
+      nodejs: process.version || '',
+      platform: platform() || '',
+      os_version: release() || '',
+      his: hisProvider, ssl: process.env?.SSL_ENABLE || 0,
       /* 
-        `ssl` tinyint unsigned DEFAULT NULL,
         `dbconnect` tinyint unsigned DEFAULT NULL,
       */
     };
@@ -299,11 +350,13 @@ export const updateAlive = async () => {
     if (status) {
       console.log(moment().format('HH:mm:ss'), '✅ Sent API Alive status result', result.status || '', result.statusCode || '', result?.message || '');
     } else {
-      console.log(moment().format('HH:mm:ss'), '❌ Sent API Alive status result', result.status || '', result.statusCode || '', result?.message || '');
+      console.error(moment().format('HH:mm:ss'), '❌ Sent API Alive status result', result.status || '', result.statusCode || '', result?.message || '');
     }
+    console.log('-'.repeat(70));
     return result;
   } catch (error) {
-    console.log(moment().format('HH:mm:ss'), '❌ Sent API Alive status error:', error?.status || error?.statusCode || '', error?.message || error || '');
+    console.error(moment().format('HH:mm:ss'), '❌ Sent API Alive status error:', error?.status || error?.statusCode || '', error?.message || error || '');
+    console.log('-'.repeat(70));
     return [];
   }
 }
@@ -311,41 +364,39 @@ export const updateAlive = async () => {
 export const erpAdminRequest = async () => {
   try {
     const result: any = await checkAdminRequest();
-    if (result.status == 200 || result.statusCode == 200) {
-      const rows = result?.rows || result?.data || [];
+    const rows = result?.rows || result?.data || [];
+    if (rows && rows.length > 0) {
       let requestResult: any;
-      for (let req of rows) {
-        if (req.request_type == 'bed') {
+      for (let row of rows) {
+        if (row.request_type == 'bed') {
           requestResult = await sendBedNo();
-          console.log('ERP admin request get bed no.', requestResult?.statusCode || requestResult?.status || '', requestResult?.message || '');
-          await updateAdminRequest({
-            request_id: req.request_id,
-            status: requestResult?.statusCode == 200 || requestResult?.status == 200 ? 'success' : `failed ${requestResult?.status || requestResult?.statusCode || ''}`,
-            isactive: 0
-          });
-        } else if (req.request_type == 'ward') {
+          console.log(moment().format('HH:mm:ss'), 'ERP admin request get bed no.', requestResult?.statusCode || requestResult?.status || '', requestResult?.message || '');
+        } else if (row.request_type == 'ward') {
           requestResult = await sendWardName();
-          console.log('ERP admin request get ward name.', requestResult?.statusCode || requestResult?.status || '', requestResult?.message || '');
-          await updateAdminRequest({
-            request_id: req.request_id,
-            status: requestResult?.statusCode == 200 || requestResult?.status == 200 ? 'success' : `failed ${requestResult?.status || requestResult?.statusCode || ''}`,
-            isactive: 0
-          });
-        } else if (req.request_type == 'alive') {
+          console.log(moment().format('HH:mm:ss'), 'ERP admin request get ward name.', requestResult?.statusCode || requestResult?.status || '', requestResult?.message || '');
+        } else if (row.request_type == 'alive') {
           requestResult = await updateAlive();
-          console.log('ERP admin request send alive status.', requestResult?.statusCode || requestResult?.status || '', requestResult?.message || '');
-        } else if (req.request_type == 'occupancy') {
-          // requestResult = await sendBedOccupancy();
-          // console.log('erpAdminRequest occupancy', requestResult);
+          console.log(moment().format('HH:mm:ss'), 'ERP admin request send alive status.', requestResult?.statusCode || requestResult?.status || '', requestResult?.message || '');
+        } else if (row.request_type == 'occupancy') {
+          requestResult = await sendBedOccupancy();
+          console.log(moment().format('HH:mm:ss'), 'ERP admin request occupancy', requestResult?.statusCode || requestResult?.status || '', requestResult?.message || '');
         }
+        const updateResult = await updateAdminRequest({
+          request_id: row.request_id,
+          status: requestResult?.statusCode == 200 || requestResult?.status == 200 ? 'success' : `failed ${requestResult?.status || requestResult?.statusCode || ''}`,
+          isactive: 0
+        });
+        console.log(moment().format('HH:mm:ss'), 'ERP admin request update status', updateResult?.statusCode || updateResult?.status || '', updateResult?.message || '');
       }
     } else {
       console.log(moment().format('HH:mm:ss'), 'No admin request', result.status || result?.statusCode || '', result?.data?.message || result?.message || '');
     }
+    console.log('-'.repeat(70));
     return result;
   } catch (error) {
     console.log(moment().format('HH:mm:ss'), 'Admin Request error', error.message);
     // console.log(moment().format('HH:mm:ss'), 'API Alive error', error.message);
+    console.log('-'.repeat(70));
     return [];
   }
 }
@@ -415,4 +466,50 @@ function toSnakeCase(value: string) {
   }
 
   return value.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
+}
+
+async function detectRuntimeEnvironment() {
+  // Default = host
+  let env: "docker" | "kubernetes" | "wsl" | "host" = "host";
+
+  // -------------------------------
+  // 1) ตรวจ Docker แบบชัวร์ที่สุด
+  // -------------------------------
+  if (fs.existsSync("/.dockerenv")) {
+    env = "docker";
+  } else {
+    try {
+      const cgroup = fs.readFileSync("/proc/1/cgroup", "utf8");
+
+      // Docker / containerd
+      if (/docker|containerd/i.test(cgroup)) {
+        env = "docker";
+      }
+
+      // Kubernetes pod
+      if (/kubepods/i.test(cgroup)) {
+        env = "kubernetes";
+      }
+    } catch { }
+  }
+
+  // -------------------------------
+  // 2) ตรวจ WSL (WSL1 / WSL2)
+  // -------------------------------
+  const r = release().toLowerCase();
+  try {
+    const version = fs.readFileSync("/proc/version", "utf8").toLowerCase();
+    if (
+      r.includes("microsoft") ||
+      r.includes("wsl") ||
+      version.includes("microsoft")
+    ) {
+      env = "wsl";
+    }
+  } catch { }
+
+  // -------------------------------
+  // 3) Return พร้อมข้อมูลเพิ่มเติม
+  // -------------------------------
+  return env;
 }

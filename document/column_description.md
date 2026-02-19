@@ -14,7 +14,7 @@
 | hospcode | string | รหัสสถานพยาบาล |
 | wardcode | string | local code |
 | wardname | string | local name |
-| std_code | string | รหัสตามมาตรฐาน กบรส. |
+| std_code | string | รหัส 6 หลักตามมาตรฐาน กบรส. |
 | bed_normal | number | จำนวนเตียงสามัญ |
 | bed_special | number | จำนวนเตียงพิเศษ |
 | bed_icu | number | จำนวนเตียง ICU |
@@ -34,12 +34,10 @@
 | column | type | describe |
 | --- | --- | --- |
 | bedno * | string | หมายเลขเตียง |
-| bedtype | string | จัดกลุ่มเตียง (ยกเลิกให้ใช้ std_code แทน) |
-| bedtype_name | string | ชื่อเตียง |
+| bedname | string | ชื่อเตียง |
 | roomno | string | เลขห้อง |
 | wardcode * | string | รหัสวอร์ด |
-| wardname | string | ชื่อวอร์ด |
-| std_code * | string | รหัสตามมาตรฐาน กบรส. |
+| std_code * | string | รหัส 6 หลักตามมาตรฐาน กบรส. |
 | isactive * | 0, 1 | 1=ใช้งาน |
 
 ## concurrentIPDByWard
@@ -65,6 +63,10 @@
 | clip | number | จำนวนเด็กแรกเกิด |
 | minithanyaruk | number | จำนวนผู้ป่วย minithanyaruk |
 | homeward | number | จำนวนผู้ป่วย homeward |
+```
+หมายเหตุ 
+cases=normal+special+icu+semi+stroke+burn+imc+lr+clip+minithanyaruk+homeward
+```
 
 ตัวอย่าง filter
 ```

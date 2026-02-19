@@ -17,6 +17,7 @@ import cronjob from './nodecron.optimized';
 const serveStatic = require('serve-static');
 var crypto = require('crypto');
 
+import { getIP } from './middleware/utils';
 import helmet = require('@fastify/helmet');
 
 var serverOption = {}
@@ -26,7 +27,7 @@ if (process.env.SSL_ENABLE && process.env.SSL_ENABLE == '1' && process.env.SSL_K
       level: 'error',
     },
     bodyLimit: 20 * 1024 * 1024,    // 20 MB
-    http2: true,
+    // http2: true,
     https: {
       key: fs.readFileSync(process.env.SSL_KEY),
       cert: fs.readFileSync(process.env.SSL_CRT)
@@ -87,8 +88,7 @@ app.decorate("authenticate", async (request: any, reply: any) => {
     request.user = await request.jwtVerify();
     request.authenDecoded = request.user;
   } catch (err) {
-    let ipAddr: any = request.headers["x-real-ip"] || request.headers["x-forwarded-for"] || request.ip;
-    console.log(moment().format('HH:mm:ss.SSS'), ipAddr, 'error:' + StatusCodes.UNAUTHORIZED, err.message);
+    console.error(moment().format('HH:mm:ss.SSS'), request.ipAddr, 'Error client try to access API ' + StatusCodes.UNAUTHORIZED, `message: '${err.message}'`);
     reply.send({
       statusCode: StatusCodes.UNAUTHORIZED,
       message: getReasonPhrase(StatusCodes.UNAUTHORIZED)
@@ -104,8 +104,7 @@ app.decorate("checkRequestKey", async (request: FastifyRequest, reply) => {
   }
   var requestKey = crypto.createHash('md5').update(process.env.REQUEST_KEY).digest('hex');
   if (!skey || skey !== requestKey) {
-    console.log('invalid key', requestKey);
-    reply.send({
+    return reply.send({
       statusCode: StatusCodes.UNAUTHORIZED,
       message: getReasonPhrase(StatusCodes.UNAUTHORIZED) + ' or invalid key'
     });
@@ -115,37 +114,36 @@ app.decorate("checkRequestKey", async (request: FastifyRequest, reply) => {
 
 // addHook pre-process ================================
 var geoip = require('geoip-lite');
+
+// Process sequence onRequest -> preHandler
 app.addHook('onRequest', async (req: any, reply) => {
   const unBlockIP = process.env.UNBLOCK_IP || '??';
-  let ipAddr: any = req.headers["x-real-ip"] || req.headers["x-forwarded-for"] || req.ip;
+  let ipAddr: any = req.headers["x-forwarded-for"] || req.headers["x-real-ip"] || req.ip;
+  req.clientIP = ipAddr;
   ipAddr = ipAddr ? ipAddr.split(',') : [''];
+  ipAddr = ipAddr[0].split(':');
   req.ipAddr = ipAddr[0].trim();
+  req.ipAddr = req.ipAddr || req.clientIP;
 
+  let isSubnet = true;
+  if (process.env?.ALLOW_API_SUBNET || false) {
+    isSubnet = await isIPInSubnet(req.clientIP);
+  }
   var geo = geoip.lookup(req.ipAddr);
-  if (geo && geo.country && geo.country != 'TH' && req.ipAddr != process.env.HOST && !unBlockIP.includes(req.ipAddr)) {
+  req.geo = geo;
+  if (!isSubnet && geo && geo.country && geo.country != 'TH' && req.ipAddr != process.env.HOST && !unBlockIP.includes(req.ipAddr)) {
     console.log(req.ipAddr, `Unacceptable country: ${geo.country}`);
     return reply.send({ status: StatusCodes.NOT_ACCEPTABLE, ip: req.ipAddr, message: getReasonPhrase(StatusCodes.NOT_ACCEPTABLE) });
   }
-  console.log(moment().format('HH:mm:ss'), geo ? geo.country : 'unk', req.ipAddr, req.url);
-
-  // const encoding = req.headers['content-encoding']; // ตรวจสอบ Content-Encoding
-  // console.log('encoding', req.url, req.headers);
-  // console.log('encoding', req.url, encoding, req.headers['accept-encoding']);
-  // ถ้า Request Body ถูกบีบอัดด้วย Gzip
-  // if (encoding === 'gzip') {
-  //   req.raw = req.raw.pipe(zlib.createGunzip()); // คลาย Gzip
-  // } else if (encoding === 'br') {
-  //   req.raw = req.raw.pipe(zlib.createBrotliDecompress()); // คลาย Brotli
-  // } else if (encoding === 'deflate') {
-  //   req.raw = req.raw.pipe(zlib.createInflate()); // คลาย Deflate
-  // }
 });
-app.addHook('preHandler', async (request, reply) => {
+app.addHook('preHandler', async (request: any, reply) => {
+  console.log(moment().format('HH:mm:ss.SSS'), request.ipAddr, request?.geo?.country || 'unk', request.method, request.url);
 });
 app.addHook('onSend', async (request, reply, payload) => {
   const headers = {
     "Cache-Control": "no-store",
     Pragma: "no-cache",
+    src: `HIS-Connect ${version || ''}-${subVersion || ''}`
   };
   reply.headers(headers);
   return payload;
@@ -165,7 +163,7 @@ var options: any = {
 app.listen(options, (err) => {
   if (err) throw err;
   const instanceId = process.env.NODE_APP_INSTANCE || '0';
-  console.info(`${moment().format('HH:mm:ss')} HIS-Connect API ${global.appDetail.version}-${global.appDetail.subVersion} started on port ${options.port}, PID: ${process.pid}`);
+  console.info(`${moment().format('HH:mm:ss')} HIS-Connect API ${global.appDetail.version}-${global.appDetail.subVersion} started on port ${options.port}, PID: ${process.pid} with NodeJS: ${process.version || ''}, Instance: ${instanceId}`);
 });
 
 // DB connection =========================================
@@ -206,7 +204,7 @@ async function connectDB() {
       date = result[0]?.[0]?.date;
     }
 
-    console.info(`   🔗 PID:${process.pid} >> HIS DB server '${dbClient}' connected, date on DB server: `, moment(date).format('YYYY-MM-DD HH:mm:ss'));
+    console.info(`   🔗 PID:${process.pid} >> HIS DB server '${dbClient}' connected, date/time on DB server:`, moment(date).format('YYYY-MM-DD HH:mm:ss'));
   } catch (error) {
     console.error(`   ❌ PID:${process.pid} >> HIS DB server '${dbClient}' connect error: `, error.message);
   }
@@ -214,9 +212,23 @@ async function connectDB() {
 
 async function checkConfigFile() {
   if (fs.existsSync('./config')) {
-    console.info(`✅ Check 'config' file exist: Successfully`);
+    console.info(`✅ PID:${process.pid} >> Check local 'config' file exist: Successfully`);
   } else {
-    console.error(`❌ Check 'config' file exist: Not found, please create file 'config' and try again.`);
+    console.error(`❌ PID:${process.pid} >> Check local 'config' file exist: Not found, please create file 'config' and try again.`);
     process.exit(1);
   }
+}
+
+async function isIPInSubnet(ip: any) {
+  if (!ip || ip === '::1' || ip === '127.0.0.1' || ip === 'localhost') {
+    return true;
+  }
+  let localIP: any = getIP();
+  if (!localIP || !localIP?.ip) {
+    return true;
+  }
+
+  localIP = (localIP?.ip || '').split('.');
+  const isValidIP = ip.includes(localIP.slice(0, 3).join('.'));
+  return isValidIP;
 }

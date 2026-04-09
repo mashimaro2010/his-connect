@@ -194,14 +194,13 @@ const sendBedNo = async () => {
         const allRows = unwrapRows(bedsResult);
         if (!allRows.length) {
             console.log(moment().format('HH:mm:ss'), 'sendBedNo', 'No bed data');
+            console.log('-'.repeat(70));
             return { statusCode: 200, message: 'No bed data' };
         }
         if (!expected)
             expected = allRows.length;
         let sentTotal = 0;
         let times = 0;
-<<<<<<< HEAD
-        const sentResult = [];
         for (let startRow = 0; startRow < allRows.length; startRow += limitRow) {
             const chunk = allRows.slice(startRow, startRow + limitRow).map(v => ({
                 ...v,
@@ -218,35 +217,12 @@ const sendBedNo = async () => {
             if (result?.status != 200 && result?.statusCode != 200) {
                 console.log(moment().format('HH:mm:ss'), '[sendBedNo] API fail', 'startRow=', startRow, 'size=', chunk.length, 'resp=', JSON.stringify(result, null, 2));
                 errorMsg = result?.message || String(result?.status || result?.statusCode || '');
-=======
-        let startRow = countBed < 500 ? -1 : 0;
-        const limitRow = 500;
-        let sentResult = [];
-        do {
-            let rows = await hismodel_1.default.getBedNo(db, null, startRow, limitRow);
-            if (rows && rows.length) {
-                rows = rows
-                    .filter((row) => row.wardcode != null && row.wardcode != '')
-                    .map((v) => {
-                    return {
-                        ...v, hospcode: hospcode,
-                        hcode5: hospcode.length == 5 ? hospcode : null,
-                        hcode9: hospcode.length == 9 ? hospcode : null
-                    };
-                });
-                result = await (0, moph_refer_1.sendingToMoph)('/save-bed-no', rows);
-                if (result?.status != 200 && result?.statusCode != 200) {
-                    error = result?.message || result?.status || result?.statusCode || null;
-                }
-                sentResult.push({ startRow, limitRow, rows: rows.length, result });
->>>>>>> 289330f363bf99d79a28333b4bccdc3497c32bb5
             }
             sentTotal += chunk.length;
             times++;
-<<<<<<< HEAD
-            sentResult.push({ startRow, limitRow, rows: chunk.length, result });
         }
         console.log(moment().format('HH:mm:ss'), `sendBedNo sent=${sentTotal} expected=${expected} chunks=${times}`, errorMsg);
+        console.log('-'.repeat(70));
         return {
             statusCode: errorMsg ? 500 : 200,
             message: errorMsg || 'ok',
@@ -254,17 +230,11 @@ const sendBedNo = async () => {
             expected,
             chunks: times
         };
-=======
-        } while (startRow < countBed && countBed != 0);
-        console.log(moment().format('HH:mm:ss'), `sendBedNo ${countBed} rows (${times} times)`, error);
-        console.log('-'.repeat(70));
-        return { statusCode: 200, sentResult };
->>>>>>> 289330f363bf99d79a28333b4bccdc3497c32bb5
     }
     catch (error) {
-        console.log(moment().format('HH:mm:ss'), 'getBedNo error', error.message);
+        console.log(moment().format('HH:mm:ss'), 'getBedNo error', error?.message || error);
         console.log('-'.repeat(70));
-        return { statusCode: error.status || 500, message: error.message || error };
+        return { statusCode: error?.status || 500, message: error?.message || error };
     }
 };
 exports.sendBedNo = sendBedNo;

@@ -212,6 +212,7 @@ export const sendBedNo = async () => {
 
     if (!allRows.length) {
       console.log(moment().format('HH:mm:ss'), 'sendBedNo', 'No bed data');
+      console.log('-'.repeat(70));
       return { statusCode: 200, message: 'No bed data' };
     }
 
@@ -221,8 +222,6 @@ export const sendBedNo = async () => {
     // 3) ส่งเป็น chunk
     let sentTotal = 0;
     let times = 0;
-<<<<<<< HEAD
-    const sentResult: any[] = [];
 
     for (let startRow = 0; startRow < allRows.length; startRow += limitRow) {
       const chunk = allRows.slice(startRow, startRow + limitRow).map(v => ({
@@ -251,7 +250,6 @@ export const sendBedNo = async () => {
         'fail=', failCount
       );
 
-
       if (result?.status != 200 && result?.statusCode != 200) {
         console.log(
           moment().format('HH:mm:ss'),
@@ -261,36 +259,10 @@ export const sendBedNo = async () => {
           'resp=', JSON.stringify(result, null, 2)
         );
         errorMsg = result?.message || String(result?.status || result?.statusCode || '');
-=======
-    let startRow = countBed < 500 ? -1 : 0; // น้อยกว่า 500 แถว ส่งครั้งเดียว
-    const limitRow = 500;
-    let sentResult = [];
-    do {
-      let rows: any = await hisModel.getBedNo(db, null, startRow, limitRow);
-      if (rows && rows.length) {
-        rows = rows
-          .filter((row: any) => row.wardcode != null && row.wardcode != '')
-          .map((v: any) => {
-            return {
-              ...v, hospcode: hospcode,
-              hcode5: hospcode.length == 5 ? hospcode : null,
-              hcode9: hospcode.length == 9 ? hospcode : null
-            };
-          });
-        result = await sendingToMoph('/save-bed-no', rows);
-        if (result?.status != 200 && result?.statusCode != 200) {
-          error = result?.message || result?.status || result?.statusCode || null;
-        }
-        sentResult.push({ startRow, limitRow, rows: rows.length, result });
->>>>>>> 289330f363bf99d79a28333b4bccdc3497c32bb5
       }
-
-
 
       sentTotal += chunk.length;
       times++;
-<<<<<<< HEAD
-      sentResult.push({ startRow, limitRow, rows: chunk.length, result });
     }
 
     console.log(
@@ -298,8 +270,8 @@ export const sendBedNo = async () => {
       `sendBedNo sent=${sentTotal} expected=${expected} chunks=${times}`,
       errorMsg
     );
+    console.log('-'.repeat(70));
 
-    // ✅ เพิ่มบรรทัดนี้ (คืนผลให้ erpAdminRequest)
     return {
       statusCode: errorMsg ? 500 : 200,
       message: errorMsg || 'ok',
@@ -309,19 +281,11 @@ export const sendBedNo = async () => {
     };
 
   } catch (error: any) {
-=======
-    } while (startRow < countBed && countBed != 0);
-    console.log(moment().format('HH:mm:ss'), `sendBedNo ${countBed} rows (${times} times)`, error);
+    console.log(moment().format('HH:mm:ss'), 'getBedNo error', error?.message || error);
     console.log('-'.repeat(70));
-    return { statusCode: 200, sentResult };
-  } catch (error) {
->>>>>>> 289330f363bf99d79a28333b4bccdc3497c32bb5
-    console.log(moment().format('HH:mm:ss'), 'getBedNo error', error.message);
-    console.log('-'.repeat(70));
-    return { statusCode: error.status || 500, message: error.message || error };
+    return { statusCode: error?.status || 500, message: error?.message || error };
   }
 };
-
 
 export const updateAlive = async () => {
   const ipServer: any = getIP();
